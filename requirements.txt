@@ -1,0 +1,5 @@
+# Whispr dependencies
+sounddevice>=0.4.6
+numpy>=1.24.0
+pynput>=1.7.6
+PyGObject>=3.42.0
