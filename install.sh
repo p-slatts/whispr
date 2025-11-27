@@ -10,6 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.local/share/whispr"
 BIN_DIR="$HOME/.local/bin"
 CONFIG_DIR="$HOME/.config/whispr"
+AUTOSTART_DIR="$HOME/.config/autostart"
+ICONS_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+APPS_DIR="$HOME/.local/share/applications"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
 echo "========================================"
@@ -36,14 +39,24 @@ echo "Checking system dependencies..."
 
 MISSING_DEPS=""
 
-# Check for GTK4
+# Check for GTK4 (for overlay mode)
 if ! pkg-config --exists gtk4 2>/dev/null; then
     MISSING_DEPS="$MISSING_DEPS libgtk-4-dev"
 fi
 
+# Check for GTK3 (for tray mode)
+if ! pkg-config --exists gtk+-3.0 2>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS libgtk-3-dev"
+fi
+
 # Check for PyGObject dependencies
 if ! pkg-config --exists pygobject-3.0 2>/dev/null; then
-    MISSING_DEPS="$MISSING_DEPS python3-gi python3-gi-cairo gir1.2-gtk-4.0"
+    MISSING_DEPS="$MISSING_DEPS python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-gtk-3.0"
+fi
+
+# Check for AppIndicator3 (for tray icon)
+if ! python3 -c "import gi; gi.require_version('AppIndicator3', '0.1')" 2>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS gir1.2-appindicator3-0.1"
 fi
 
 # Check for PortAudio (for sounddevice)
@@ -103,8 +116,12 @@ fi
 echo
 echo "Creating directories..."
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/icons"
 mkdir -p "$BIN_DIR"
 mkdir -p "$CONFIG_DIR"
+mkdir -p "$AUTOSTART_DIR"
+mkdir -p "$ICONS_DIR"
+mkdir -p "$APPS_DIR"
 mkdir -p "$SYSTEMD_DIR"
 
 # Create virtual environment with system site packages (for PyGObject)
@@ -127,6 +144,26 @@ echo
 echo "Installing Whispr..."
 cp "$SCRIPT_DIR/whispr.py" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/overlay.py" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/tray.py" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/settings.py" "$INSTALL_DIR/"
+
+# Copy icons
+echo "Installing icons..."
+cp "$SCRIPT_DIR/icons/"*.svg "$INSTALL_DIR/icons/"
+cp "$SCRIPT_DIR/icons/"*.svg "$ICONS_DIR/"
+
+# Update icon cache
+gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
+
+# Install desktop file for applications menu
+echo "Installing desktop files..."
+cp "$SCRIPT_DIR/whispr.desktop" "$APPS_DIR/"
+
+# Install autostart file (enabled by default)
+cp "$SCRIPT_DIR/whispr-autostart.desktop" "$AUTOSTART_DIR/whispr.desktop"
+
+# Update desktop database
+update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
 # Create launcher script
 cat > "$BIN_DIR/whispr" << 'LAUNCHER'
@@ -136,7 +173,7 @@ exec "$WHISPR_DIR/venv/bin/python" "$WHISPR_DIR/whispr.py" "$@"
 LAUNCHER
 chmod +x "$BIN_DIR/whispr"
 
-# Create systemd service
+# Create systemd service (optional, for non-tray mode)
 cat > "$SYSTEMD_DIR/whispr.service" << 'SERVICE'
 [Unit]
 Description=Whispr - Speech to Text
@@ -166,22 +203,24 @@ echo "========================================"
 echo "  Installation Complete!"
 echo "========================================"
 echo
-echo "To start Whispr:"
-echo "  whispr                    # Run in terminal"
-echo "  systemctl --user start whispr   # Run as service"
+echo "Whispr has been installed and will start automatically on login."
 echo
-echo "To enable on login:"
-echo "  systemctl --user enable whispr"
+echo "To start now:"
+echo "  whispr --tray             # Run with system tray icon"
+echo "  whispr                    # Run without tray (overlay only)"
+echo
+echo "To disable autostart:"
+echo "  rm ~/.config/autostart/whispr.desktop"
 echo
 echo "Usage:"
-echo "  Hold CTRL for 0.5 seconds to start recording"
-echo "  Release CTRL to transcribe and paste"
+echo "  Hold ALT or PRINT SCREEN for 0.5 seconds to start recording"
+echo "  Release to transcribe and paste"
 echo
-echo "Options:"
-echo "  whispr --help             # Show all options"
-echo "  whispr --key alt          # Use Alt key instead"
-echo "  whispr --hold 1.0         # 1 second hold time"
-echo "  whispr --openai           # Use OpenAI Whisper API"
+echo "The tray icon provides quick access to:"
+echo "  - Start/Stop recording"
+echo "  - Recent transcriptions"
+echo "  - Settings"
+echo "  - Autostart toggle"
 echo
 echo "Config file: ~/.config/whispr/config.py"
 echo

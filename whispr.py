@@ -8,6 +8,7 @@ Features:
 - Beautiful animated overlay with real-time audio visualization
 - Multiple transcription backends (whisper.cpp local, server, OpenAI API)
 - Auto-paste to active window
+- System tray integration for GNOME/Pop!_OS
 - Integrates with existing BlahST configuration
 """
 
@@ -18,12 +19,15 @@ import signal
 import threading
 import subprocess
 from pathlib import Path
-from typing import Optional
-from dataclasses import dataclass
+from typing import Optional, List
+from dataclasses import dataclass, field
 from enum import Enum, auto
 
 # Global debug flag
 DEBUG = False
+
+# Global tray mode flag (set before GTK import)
+TRAY_MODE = '--tray' in sys.argv
 
 def debug(msg: str):
     """Print debug message if debug mode is enabled"""
@@ -34,14 +38,29 @@ def debug(msg: str):
 from pynput import keyboard
 from pynput.keyboard import Key
 
-# GUI
+# GUI - use GTK 3 for tray mode (AppIndicator compatibility), GTK 4 otherwise
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gdk', '4.0')
-from gi.repository import Gtk, Gdk, GLib
+if TRAY_MODE:
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, GLib
+    # Tray imports
+    try:
+        gi.require_version('AppIndicator3', '0.1')
+        from gi.repository import AppIndicator3
+        HAS_APPINDICATOR = True
+    except:
+        HAS_APPINDICATOR = False
+        print("Warning: AppIndicator3 not available, tray icon disabled", file=sys.stderr)
+else:
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Gdk', '4.0')
+    from gi.repository import Gtk, Gdk, GLib
+    HAS_APPINDICATOR = False
 
-# Our overlay
-from overlay import WhisprOverlay
+# Our overlay (only import for non-tray mode with GTK4)
+WhisprOverlay = None
+if not TRAY_MODE:
+    from overlay import WhisprOverlay
 
 
 @dataclass
@@ -67,6 +86,10 @@ class WhisprConfig:
 
     # UI
     overlay_position: str = "bottom"  # center, top, bottom
+
+    # Feedback
+    play_sounds: bool = True
+    show_notifications: bool = True
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> 'WhisprConfig':
@@ -349,11 +372,14 @@ class Transcriber:
 class Whispr:
     """Main Whispr application"""
 
-    def __init__(self, config: Optional[WhisprConfig] = None):
+    MAX_HISTORY = 10  # Maximum transcriptions to keep in history
+
+    def __init__(self, config: Optional[WhisprConfig] = None, tray_mode: bool = False):
         self.config = config or WhisprConfig.load()
         self.state = WhisprState.IDLE
         self.recorder = AudioRecorder(self.config.sample_rate, self.config.channels)
         self.transcriber = Transcriber(self.config)
+        self.tray_mode = tray_mode
 
         # Key tracking
         self.key_press_time: Optional[float] = None
@@ -362,11 +388,103 @@ class Whispr:
 
         # GTK
         self.app: Optional[Gtk.Application] = None
-        self.overlay: Optional[WhisprOverlay] = None
+        self.overlay = None  # WhisprOverlay (GTK4 mode only)
+
+        # Tray (GTK3 mode only)
+        self.tray = None
+        self.settings_dialog = None
+
+        # Transcription history
+        self._transcription_history: List[str] = []
 
         # Threading
         self._lock = threading.Lock()
         self._activation_source = None
+
+    # --- Transcription History ---
+
+    def get_recent_transcriptions(self) -> List[str]:
+        """Get recent transcription history"""
+        return self._transcription_history.copy()
+
+    def add_transcription(self, text: str):
+        """Add a transcription to history"""
+        if text:
+            self._transcription_history.insert(0, text)
+            # Trim to max size
+            self._transcription_history = self._transcription_history[:self.MAX_HISTORY]
+            # Notify tray
+            if self.tray:
+                self.tray.on_transcription_complete(text)
+
+    def clear_transcription_history(self):
+        """Clear transcription history"""
+        self._transcription_history.clear()
+
+    # --- Settings ---
+
+    def show_settings(self):
+        """Show settings dialog"""
+        if self.settings_dialog:
+            self.settings_dialog.present()
+            return
+
+        from settings import WhisprSettingsDialog
+        self.settings_dialog = WhisprSettingsDialog(self)
+        self.settings_dialog.connect("destroy", self._on_settings_closed)
+        self.settings_dialog.show_all()
+
+    def _on_settings_closed(self, widget):
+        """Handle settings dialog close"""
+        self.settings_dialog = None
+
+    def reload_config(self):
+        """Reload configuration and apply changes"""
+        self.trigger_keys = self._get_trigger_keys()
+
+    def set_autostart(self, enabled: bool):
+        """Enable or disable autostart"""
+        autostart_dir = Path.home() / ".config/autostart"
+        autostart_file = autostart_dir / "whispr.desktop"
+
+        if enabled:
+            autostart_dir.mkdir(parents=True, exist_ok=True)
+            content = """[Desktop Entry]
+Name=Whispr
+Comment=Voice to text with hold-to-talk
+Exec=whispr --tray
+Icon=whispr
+Type=Application
+X-GNOME-Autostart-enabled=true
+Hidden=false
+"""
+            autostart_file.write_text(content)
+        else:
+            if autostart_file.exists():
+                autostart_file.unlink()
+
+    # --- Tray State ---
+
+    def _update_tray_state(self):
+        """Update tray icon based on current state"""
+        if self.tray:
+            state_map = {
+                WhisprState.IDLE: 'idle',
+                WhisprState.WAITING: 'idle',
+                WhisprState.RECORDING: 'recording',
+                WhisprState.TRANSCRIBING: 'transcribing'
+            }
+            self.tray.set_state(state_map.get(self.state, 'idle'))
+
+    def toggle_recording(self):
+        """Toggle recording on/off (for tray menu)"""
+        with self._lock:
+            if self.state == WhisprState.IDLE:
+                # Start recording
+                self._start_recording()
+            elif self.state == WhisprState.RECORDING:
+                # Stop recording
+                self._stop_recording()
 
     def _get_trigger_keys(self) -> list:
         """Get normalized list of trigger key names"""
@@ -461,6 +579,7 @@ class Whispr:
     def _start_recording(self):
         """Start recording audio"""
         self.state = WhisprState.RECORDING
+        self._update_tray_state()
 
         # Start recorder with level callback
         def on_level(level):
@@ -469,11 +588,11 @@ class Whispr:
 
         self.recorder.start(level_callback=on_level)
 
-        # Show overlay
+        # Show overlay (GTK4 mode only)
         if self.overlay:
             GLib.idle_add(self.overlay.show_recording)
 
-        # Play start sound (optional)
+        # Play start sound
         self._play_sound('start')
 
         debug("Recording...")
@@ -481,8 +600,9 @@ class Whispr:
     def _stop_recording(self):
         """Stop recording and start transcription"""
         self.state = WhisprState.TRANSCRIBING
+        self._update_tray_state()
 
-        # Update overlay
+        # Update overlay (GTK4 mode only)
         if self.overlay:
             GLib.idle_add(self.overlay.show_transcribing)
 
@@ -520,6 +640,7 @@ class Whispr:
 
         self.state = WhisprState.IDLE
         self.key_press_time = None
+        self._update_tray_state()
 
         if error:
             self._notify("Whispr", f"Error: {error}")
@@ -531,6 +652,9 @@ class Whispr:
             return
 
         debug(f"Result: {text}")
+
+        # Add to transcription history
+        self.add_transcription(text)
 
         # Auto-type text directly at cursor (without touching clipboard)
         if self.config.auto_paste:
@@ -710,9 +834,11 @@ class Whispr:
 
     def _notify(self, title: str, message: str):
         """Show desktop notification"""
+        if not self.config.show_notifications:
+            return
         try:
             subprocess.run(
-                ['notify-send', '-t', '3000', '-a', 'Whispr', title, message],
+                ['notify-send', '-t', '3000', '-a', 'Whispr', '-i', 'whispr', title, message],
                 check=True
             )
         except FileNotFoundError:
@@ -720,6 +846,9 @@ class Whispr:
 
     def _play_sound(self, sound_type: str):
         """Play feedback sound"""
+        if not self.config.play_sounds:
+            return
+
         sounds = {
             'start': '/usr/share/sounds/freedesktop/stereo/device-added.oga',
             'success': '/usr/share/sounds/freedesktop/stereo/complete.oga',
@@ -738,10 +867,24 @@ class Whispr:
                 pass
 
     def _on_activate(self, app):
-        """GTK application activation"""
-        self.overlay = WhisprOverlay()
-        self.overlay.set_application(app)
+        """GTK application activation (GTK4 mode only)"""
+        if WhisprOverlay:
+            self.overlay = WhisprOverlay()
+            self.overlay.set_application(app)
 
+        self._start_listener()
+
+    def _on_activate_gtk3(self, app):
+        """GTK application activation (GTK3/tray mode)"""
+        # Create tray icon
+        if HAS_APPINDICATOR:
+            from tray import WhisprTray
+            self.tray = WhisprTray(self)
+
+        self._start_listener()
+
+    def _start_listener(self):
+        """Start key listener and show startup message"""
         # Start key listener in background thread
         listener = keyboard.Listener(
             on_press=self._on_key_press,
@@ -761,11 +904,29 @@ class Whispr:
 
     def run(self):
         """Run the application"""
+        if self.tray_mode:
+            self._run_tray_mode()
+        else:
+            self._run_overlay_mode()
+
+    def _run_overlay_mode(self):
+        """Run with GTK4 overlay (no tray)"""
         self.app = Gtk.Application(application_id='com.whispr.app')
         self.app.connect('activate', self._on_activate)
         self.app.hold()  # Keep running without visible windows
 
-        # Handle Ctrl+C gracefully using GLib's signal handling
+        # Handle Ctrl+C gracefully
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_sigint)
+
+        self.app.run()
+
+    def _run_tray_mode(self):
+        """Run with GTK3 tray icon"""
+        self.app = Gtk.Application(application_id='com.whispr.app')
+        self.app.connect('activate', self._on_activate_gtk3)
+        self.app.hold()
+
+        # Handle Ctrl+C gracefully
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_sigint)
 
         self.app.run()
@@ -786,14 +947,17 @@ def main():
         epilog='''
 Examples:
   whispr                      # Use defaults (Alt key, 0.5s hold)
-  whispr --key ctrl --hold 1  # Use Ctrl key with 1 second hold
+  whispr --tray               # Run with system tray icon
+  whispr --keys ctrl --hold 1 # Use Ctrl key with 1 second hold
   whispr --server 127.0.0.1:58080  # Use whisper.cpp server
   whispr --openai             # Use OpenAI Whisper API
 '''
     )
+    parser.add_argument('--tray', action='store_true',
+                       help='Run with system tray icon (GTK3 mode)')
     parser.add_argument('--keys', default=None,
                        help='Trigger keys, comma-separated (default: alt,print_screen)')
-    parser.add_argument('--hold', type=float, default=0.5,
+    parser.add_argument('--hold', type=float, default=None,
                        help='Hold duration in seconds (default: 0.5)')
     parser.add_argument('--server',
                        help='Whisper.cpp server address (IP:PORT)')
@@ -815,7 +979,8 @@ Examples:
     config = WhisprConfig.load()
     if args.keys:
         config.trigger_keys = args.keys
-    config.hold_duration = args.hold
+    if args.hold is not None:
+        config.hold_duration = args.hold
 
     if args.server:
         config.whisper_server = args.server
@@ -828,7 +993,7 @@ Examples:
         config.save()
         print(f"Config saved to ~/.config/whispr/config.py", file=sys.stderr)
 
-    whispr = Whispr(config)
+    whispr = Whispr(config, tray_mode=args.tray)
     whispr.run()
 
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Whispr
+Comment=Voice to text with hold-to-talk
+GenericName=Speech to Text
+Exec=whispr --tray
+Icon=whispr
+Type=Application
+Categories=Utility;Accessibility;Audio;
+Keywords=voice;speech;dictation;transcribe;whisper;stt;
+StartupNotify=false
+Terminal=false
