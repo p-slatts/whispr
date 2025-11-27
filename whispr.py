@@ -559,49 +559,114 @@ class Whispr:
                 continue
         print("Warning: No clipboard tool found", file=sys.stderr)
 
-    def _is_terminal_window(self) -> bool:
-        """Check if the active window is a terminal emulator"""
+    def _get_active_window_class(self) -> str:
+        """Get the WM_CLASS of the active window"""
         try:
-            # Get active window class
+            # Get active window ID
             result = subprocess.run(
-                ['xdotool', 'getactivewindow', 'getwindowclassname'],
+                ['xdotool', 'getactivewindow'],
+                capture_output=True, text=True, timeout=1
+            )
+            if result.returncode != 0:
+                return ""
+            window_id = result.stdout.strip()
+
+            # Get WM_CLASS using xprop
+            result = subprocess.run(
+                ['xprop', '-id', window_id, 'WM_CLASS'],
                 capture_output=True, text=True, timeout=1
             )
             if result.returncode == 0:
-                window_class = result.stdout.strip().lower()
-                debug(f"Active window class: {window_class}")
-                # Common terminal emulators
-                terminals = [
-                    'gnome-terminal', 'konsole', 'xterm', 'urxvt', 'rxvt',
-                    'terminator', 'tilix', 'alacritty', 'kitty', 'st',
-                    'xfce4-terminal', 'mate-terminal', 'lxterminal',
-                    'terminology', 'guake', 'yakuake', 'tilda', 'termite',
-                    'hyper', 'wezterm', 'foot', 'contour', 'cool-retro-term',
-                    'qterminal', 'sakura', 'roxterm', 'evilvte', 'lilyterm',
-                    'terminal', 'term',  # Generic matches
-                ]
-                for term in terminals:
-                    if term in window_class:
-                        return True
+                # Parse: WM_CLASS(STRING) = "instance", "class"
+                output = result.stdout.lower()
+                debug(f"Window WM_CLASS: {output.strip()}")
+                return output
         except:
             pass
+        return ""
+
+    def _is_terminal_window(self) -> bool:
+        """Check if the active window is a terminal emulator"""
+        window_class = self._get_active_window_class()
+        if not window_class:
+            return False
+
+        # Common terminal emulators
+        terminals = [
+            'gnome-terminal', 'konsole', 'xterm', 'urxvt', 'rxvt',
+            'terminator', 'tilix', 'alacritty', 'kitty', 'st-256color',
+            'xfce4-terminal', 'mate-terminal', 'lxterminal',
+            'terminology', 'guake', 'yakuake', 'tilda', 'termite',
+            'hyper', 'wezterm', 'foot', 'contour', 'cool-retro-term',
+            'qterminal', 'sakura', 'roxterm', 'evilvte', 'lilyterm',
+        ]
+        for term in terminals:
+            if term in window_class:
+                return True
         return False
 
     def _paste(self, text: str = None):
-        """Paste text at cursor, preserving clipboard contents"""
+        """Paste text at cursor using multiple strategies for reliability"""
         debug(f"_paste called with text length: {len(text) if text else 0}")
+
+        if not text:
+            return
+
         try:
             # First, ensure all modifier keys are released
             debug("Releasing modifier keys...")
-            subprocess.run(['xdotool', 'keyup', 'ctrl', 'alt', 'shift', 'super', 'Print'], check=False)
-            time.sleep(0.1)
+            subprocess.run(['xdotool', 'keyup', 'ctrl', 'alt', 'shift', 'super', 'Print'],
+                          check=False, timeout=1)
+            time.sleep(0.15)
 
-            # Detect if we're in a terminal (needs Ctrl+Shift+V instead of Ctrl+V)
+            # Get active window info for debugging
+            try:
+                result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'],
+                                       capture_output=True, text=True, timeout=1)
+                debug(f"Active window: {result.stdout.strip()}")
+            except:
+                pass
+
+            # Detect if we're in a terminal
             is_terminal = self._is_terminal_window()
-            paste_key = 'ctrl+shift+v' if is_terminal else 'ctrl+v'
-            debug(f"Using paste key: {paste_key} (terminal={is_terminal})")
+            debug(f"Terminal detected: {is_terminal}")
 
-            if text:
+            if is_terminal:
+                # For terminals, use clipboard + Ctrl+Shift+V
+                # Save current clipboard
+                saved_clipboard = None
+                try:
+                    result = subprocess.run(['xsel', '-ob'], capture_output=True, timeout=1)
+                    if result.returncode == 0:
+                        saved_clipboard = result.stdout
+                        debug(f"Saved clipboard: {len(saved_clipboard)} bytes")
+                except:
+                    pass
+
+                # Set clipboard and paste
+                debug(f"Setting clipboard for terminal paste...")
+                subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
+                time.sleep(0.05)
+
+                debug("Pasting with ctrl+shift+v...")
+                subprocess.run(
+                    ['xdotool', 'key', 'ctrl+shift+v'],
+                    check=True, timeout=2
+                )
+                debug("Terminal paste complete")
+
+                # Restore clipboard
+                if saved_clipboard is not None:
+                    def restore_clipboard():
+                        time.sleep(0.5)
+                        try:
+                            subprocess.run(['xsel', '-ib'], input=saved_clipboard, check=True, timeout=1)
+                            debug("Clipboard restored")
+                        except:
+                            pass
+                    threading.Thread(target=restore_clipboard, daemon=True).start()
+            else:
+                # For GUI apps, use clipboard paste (faster for long text)
                 # Save current clipboard contents
                 saved_clipboard = None
                 try:
@@ -615,11 +680,14 @@ class Whispr:
                 # Put our text in clipboard
                 debug(f"Setting clipboard to: {text[:30]}...")
                 subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
-
-                # Small delay then paste
                 time.sleep(0.05)
-                debug(f"Pasting with {paste_key}...")
-                subprocess.run(['xdotool', 'key', '--clearmodifiers', paste_key], check=True, timeout=2)
+
+                # Paste with Ctrl+V
+                debug("Pasting with ctrl+v...")
+                subprocess.run(
+                    ['xdotool', 'key', '--clearmodifiers', 'ctrl+v'],
+                    check=True, timeout=2
+                )
                 debug("Paste complete")
 
                 # Restore original clipboard after a delay
@@ -632,10 +700,6 @@ class Whispr:
                         except:
                             pass
                     threading.Thread(target=restore_clipboard, daemon=True).start()
-            else:
-                # Just paste from clipboard
-                debug(f"Using {paste_key} paste")
-                subprocess.run(['xdotool', 'key', '--clearmodifiers', paste_key], check=True)
 
         except FileNotFoundError:
             print("xdotool or xsel not found, cannot auto-paste", file=sys.stderr)
