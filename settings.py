@@ -4,11 +4,12 @@ Whispr Settings Dialog - GTK configuration interface
 """
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib, Pango
 
-from pathlib import Path
-from typing import Optional, Dict, Any
+gi.require_version("Gtk", "3.0")
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
+
+from gi.repository import Gtk  # noqa: E402
 
 
 class WhisprSettingsDialog(Gtk.Window):
@@ -35,7 +36,7 @@ class WhisprSettingsDialog(Gtk.Window):
             self.set_modal(True)
 
         # Track changes
-        self._changes: Dict[str, Any] = {}
+        self._changes: dict[str, Any] = {}
 
         self._build_ui()
 
@@ -113,12 +114,16 @@ class WhisprSettingsDialog(Gtk.Window):
 
         keys_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=15)
 
-        current_keys = self.config.trigger_keys.lower().split(',')
+        current_keys = self.config.trigger_keys.lower().split(",")
         current_keys = [k.strip() for k in current_keys]
 
         self.key_checkboxes = {}
-        for key_name, key_label in [('alt', 'Alt'), ('print_screen', 'Print Screen'),
-                                     ('ctrl', 'Ctrl'), ('super', 'Super')]:
+        for key_name, key_label in [
+            ("alt", "Alt"),
+            ("print_screen", "Print Screen"),
+            ("ctrl", "Ctrl"),
+            ("super", "Super"),
+        ]:
             cb = Gtk.CheckButton(label=key_label)
             cb.set_active(key_name in current_keys)
             cb.connect("toggled", self._on_key_toggled)
@@ -266,7 +271,9 @@ class WhisprSettingsDialog(Gtk.Window):
         # Text Output section
         page.pack_start(self._create_section_label("Text Output"), False, False, 0)
 
-        self.auto_paste_check = Gtk.CheckButton(label="Automatically paste transcribed text at cursor")
+        self.auto_paste_check = Gtk.CheckButton(
+            label="Automatically paste transcribed text at cursor"
+        )
         self.auto_paste_check.set_active(self.config.auto_paste)
         self.auto_paste_check.connect("toggled", self._on_paste_toggled)
         page.pack_start(self.auto_paste_check, False, False, 0)
@@ -280,12 +287,12 @@ class WhisprSettingsDialog(Gtk.Window):
         page.pack_start(self._create_section_label("Feedback"), False, False, 0)
 
         self.sounds_check = Gtk.CheckButton(label="Play sounds for recording start/stop")
-        self.sounds_check.set_active(getattr(self.config, 'play_sounds', True))
+        self.sounds_check.set_active(getattr(self.config, "play_sounds", True))
         self.sounds_check.connect("toggled", self._on_sounds_toggled)
         page.pack_start(self.sounds_check, False, False, 0)
 
         self.notifications_check = Gtk.CheckButton(label="Show desktop notifications")
-        self.notifications_check.set_active(getattr(self.config, 'show_notifications', True))
+        self.notifications_check.set_active(getattr(self.config, "show_notifications", True))
         self.notifications_check.connect("toggled", self._on_notifications_toggled)
         page.pack_start(self.notifications_check, False, False, 0)
 
@@ -310,55 +317,52 @@ class WhisprSettingsDialog(Gtk.Window):
     def _on_key_toggled(self, widget):
         keys = [k for k, cb in self.key_checkboxes.items() if cb.get_active()]
         if keys:
-            self._changes['trigger_keys'] = ','.join(keys)
+            self._changes["trigger_keys"] = ",".join(keys)
 
     def _on_duration_changed(self, widget):
-        self._changes['hold_duration'] = widget.get_value()
+        self._changes["hold_duration"] = widget.get_value()
 
     def _on_autostart_toggled(self, widget):
-        self._changes['autostart'] = widget.get_active()
+        self._changes["autostart"] = widget.get_active()
 
     def _on_backend_changed(self, widget, backend: str):
         if widget.get_active():
             if backend == "local":
-                self._changes['use_openai'] = False
-                self._changes['whisper_server'] = ""
+                self._changes["use_openai"] = False
+                self._changes["whisper_server"] = ""
             elif backend == "server":
-                self._changes['use_openai'] = False
+                self._changes["use_openai"] = False
             elif backend == "openai":
-                self._changes['use_openai'] = True
+                self._changes["use_openai"] = True
             self._update_backend_ui()
 
     def _on_model_changed(self, widget):
-        self._changes['whisper_model'] = widget.get_text()
+        self._changes["whisper_model"] = widget.get_text()
 
     def _on_server_changed(self, widget):
-        self._changes['whisper_server'] = widget.get_text()
+        self._changes["whisper_server"] = widget.get_text()
 
     def _on_api_key_changed(self, widget):
-        self._changes['openai_api_key'] = widget.get_text()
+        self._changes["openai_api_key"] = widget.get_text()
 
     def _on_paste_toggled(self, widget):
-        self._changes['auto_paste'] = widget.get_active()
+        self._changes["auto_paste"] = widget.get_active()
 
     def _on_clipboard_toggled(self, widget):
-        self._changes['copy_to_clipboard'] = widget.get_active()
+        self._changes["copy_to_clipboard"] = widget.get_active()
 
     def _on_sounds_toggled(self, widget):
-        self._changes['play_sounds'] = widget.get_active()
+        self._changes["play_sounds"] = widget.get_active()
 
     def _on_notifications_toggled(self, widget):
-        self._changes['show_notifications'] = widget.get_active()
+        self._changes["show_notifications"] = widget.get_active()
 
     def _on_browse_model(self, widget):
         dialog = Gtk.FileChooserDialog(
-            title="Select Whisper Model",
-            parent=self,
-            action=Gtk.FileChooserAction.OPEN
+            title="Select Whisper Model", parent=self, action=Gtk.FileChooserAction.OPEN
         )
         dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-            Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK
         )
 
         filter_bin = Gtk.FileFilter()
@@ -385,8 +389,8 @@ class WhisprSettingsDialog(Gtk.Window):
     def _apply_changes(self):
         """Apply all changes to config"""
         # Handle autostart separately
-        if 'autostart' in self._changes:
-            self._set_autostart(self._changes.pop('autostart'))
+        if "autostart" in self._changes:
+            self._set_autostart(self._changes.pop("autostart"))
 
         # Apply config changes
         for key, value in self._changes.items():
@@ -397,7 +401,7 @@ class WhisprSettingsDialog(Gtk.Window):
         self.config.save()
 
         # Notify whispr of changes
-        if hasattr(self.whispr, 'reload_config'):
+        if hasattr(self.whispr, "reload_config"):
             self.whispr.reload_config()
 
         self._changes.clear()

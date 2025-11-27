@@ -13,48 +13,50 @@ Features:
 """
 
 import os
-import sys
-import time
 import signal
-import threading
 import subprocess
-from pathlib import Path
-from typing import Optional, List
-from dataclasses import dataclass, field
+import sys
+import threading
+import time
+from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 
 # Global debug flag
 DEBUG = False
 
 # Global tray mode flag (set before GTK import)
-TRAY_MODE = '--tray' in sys.argv
+TRAY_MODE = "--tray" in sys.argv
+
 
 def debug(msg: str):
     """Print debug message if debug mode is enabled"""
     if DEBUG:
         print(f"DEBUG: {msg}", file=sys.stderr)
 
-# Key monitoring
-from pynput import keyboard
-from pynput.keyboard import Key
 
+# Key monitoring
 # GUI - use GTK 3 for tray mode (AppIndicator compatibility), GTK 4 otherwise
-import gi
+import gi  # noqa: E402
+from pynput import keyboard  # noqa: E402
+from pynput.keyboard import Key  # noqa: E402
+
 if TRAY_MODE:
-    gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk, GLib
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import GLib, Gtk
+
     # Tray imports
     try:
-        gi.require_version('AppIndicator3', '0.1')
-        from gi.repository import AppIndicator3
+        gi.require_version("AppIndicator3", "0.1")
         HAS_APPINDICATOR = True
-    except:
+    except ValueError:
         HAS_APPINDICATOR = False
         print("Warning: AppIndicator3 not available, tray icon disabled", file=sys.stderr)
 else:
-    gi.require_version('Gtk', '4.0')
-    gi.require_version('Gdk', '4.0')
-    from gi.repository import Gtk, Gdk, GLib
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import GLib, Gtk
+
     HAS_APPINDICATOR = False
 
 # Our overlay (only import for non-tray mode with GTK4)
@@ -66,6 +68,7 @@ if not TRAY_MODE:
 @dataclass
 class WhisprConfig:
     """Configuration for Whispr"""
+
     # Activation
     trigger_keys: str = "alt,print_screen"  # Comma-separated: ctrl, alt, super, print_screen
     hold_duration: float = 0.5  # seconds to hold before activating
@@ -92,7 +95,7 @@ class WhisprConfig:
     show_notifications: bool = True
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> 'WhisprConfig':
+    def load(cls, path: Path | None = None) -> "WhisprConfig":
         """Load config from file or return defaults"""
         if path is None:
             path = Path.home() / ".config" / "whispr" / "config.py"
@@ -107,8 +110,8 @@ class WhisprConfig:
                     if hasattr(config, key):
                         setattr(config, key, value)
                 # Backwards compatibility: old trigger_key -> new trigger_keys
-                if 'trigger_key' in config_vars and 'trigger_keys' not in config_vars:
-                    config.trigger_keys = config_vars['trigger_key']
+                if "trigger_key" in config_vars and "trigger_keys" not in config_vars:
+                    config.trigger_keys = config_vars["trigger_key"]
             except Exception as e:
                 print(f"Error loading config: {e}", file=sys.stderr)
 
@@ -122,18 +125,18 @@ class WhisprConfig:
 
                     # Extract AI path
                     for line in content.splitlines():
-                        if line.startswith('AI='):
-                            ai_path = line.split('=', 1)[1].strip('"').strip("'")
-                            ai_path = ai_path.replace('$HOME', str(Path.home()))
+                        if line.startswith("AI="):
+                            ai_path = line.split("=", 1)[1].strip('"').strip("'")
+                            ai_path = ai_path.replace("$HOME", str(Path.home()))
                             break
 
                     # Extract model path
                     for line in content.splitlines():
-                        if line.startswith('WMODEL='):
-                            model_path = line.split('=', 1)[1].strip('"').strip("'")
-                            model_path = model_path.replace('$HOME', str(Path.home()))
-                            model_path = model_path.replace('$AI', ai_path)
-                            model_path = model_path.replace('${WHISPER_DMODEL:-"', '').rstrip('"}')
+                        if line.startswith("WMODEL="):
+                            model_path = line.split("=", 1)[1].strip('"').strip("'")
+                            model_path = model_path.replace("$HOME", str(Path.home()))
+                            model_path = model_path.replace("$AI", ai_path)
+                            model_path = model_path.replace('${WHISPER_DMODEL:-"', "").rstrip('"}')
 
                             if Path(model_path).exists():
                                 config.whisper_model = model_path
@@ -143,7 +146,7 @@ class WhisprConfig:
 
         return config
 
-    def save(self, path: Optional[Path] = None):
+    def save(self, path: Path | None = None):
         """Save config to file"""
         if path is None:
             path = Path.home() / ".config" / "whispr" / "config.py"
@@ -176,6 +179,7 @@ auto_paste = {self.auto_paste}
 
 class WhisprState(Enum):
     """State machine for Whispr"""
+
     IDLE = auto()
     WAITING = auto()
     RECORDING = auto()
@@ -190,35 +194,39 @@ class AudioRecorder:
         self.channels = channels
         self.is_recording = False
         self.current_level = 0.0
-        self.level_callback: Optional[callable] = None
-        self.rec_process: Optional[subprocess.Popen] = None
+        self.level_callback: callable | None = None
+        self.rec_process: subprocess.Popen | None = None
         self.temp_wav = "/dev/shm/whispr_rec.wav"  # RAM disk like BlahST
 
-    def start(self, level_callback: Optional[callable] = None):
+    def start(self, level_callback: callable | None = None):
         """Start recording using sox"""
         self.level_callback = level_callback
         self.is_recording = True
 
         # Use sox rec command like BlahST does
         # rec -q -t wav $ramf rate 16k silence 1 0.1 1% 1 2.0 3% channels 1
-        self.rec_process = subprocess.Popen([
-            'rec', '-q', '-t', 'wav', self.temp_wav,
-            'rate', '16k', 'channels', '1'
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.rec_process = subprocess.Popen(
+            ["rec", "-q", "-t", "wav", self.temp_wav, "rate", "16k", "channels", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
         # Start level monitoring in background (approximate)
         if self.level_callback:
+
             def monitor_level():
                 while self.is_recording:
                     # Simulate level changes for visual feedback
                     import random
+
                     level = random.uniform(0.2, 0.8)
                     GLib.idle_add(self.level_callback, level)
                     time.sleep(0.05)
+
             thread = threading.Thread(target=monitor_level, daemon=True)
             thread.start()
 
-    def stop(self) -> Optional[str]:
+    def stop(self) -> str | None:
         """Stop recording and return path to WAV file"""
         self.is_recording = False
 
@@ -260,10 +268,10 @@ class Transcriber:
     def _transcribe_local(self, audio_path: str) -> str:
         """Use local whisper.cpp"""
         transcribe_cmd = None
-        for cmd in ['transcribe', 'whisper-cli', 'whisper']:
+        for cmd in ["transcribe", "whisper-cli", "whisper"]:
             try:
-                result = subprocess.run([cmd, '--help'], capture_output=True)
-                if result.returncode == 0 or b'usage' in result.stderr.lower():
+                result = subprocess.run([cmd, "--help"], capture_output=True)
+                if result.returncode == 0 or b"usage" in result.stderr.lower():
                     transcribe_cmd = cmd
                     break
             except FileNotFoundError:
@@ -275,10 +283,10 @@ class Transcriber:
                 "  ln -s /path/to/whisper.cpp/whisper-cli ~/.local/bin/transcribe"
             )
 
-        cmd = [transcribe_cmd, '-t', '8', '-nt']
+        cmd = [transcribe_cmd, "-t", "8", "-nt"]
         if self.config.whisper_model:
-            cmd.extend(['-m', self.config.whisper_model])
-        cmd.extend(['-f', audio_path])
+            cmd.extend(["-m", self.config.whisper_model])
+        cmd.extend(["-f", audio_path])
 
         debug(f"Running command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -288,13 +296,15 @@ class Transcriber:
 
         # Check for actual errors (not just initialization/timing messages)
         stderr_lower = result.stderr.lower()
-        has_error = ('error:' in stderr_lower or
-                     'failed to read' in stderr_lower or
-                     'could not open' in stderr_lower)
+        has_error = (
+            "error:" in stderr_lower
+            or "failed to read" in stderr_lower
+            or "could not open" in stderr_lower
+        )
         if result.returncode != 0 or has_error:
             # Find the actual error line
             for line in result.stderr.splitlines():
-                if 'error' in line.lower() or 'failed' in line.lower():
+                if "error" in line.lower() or "failed" in line.lower():
                     debug(f"Error line: {line}")
             raise RuntimeError(f"Transcription failed: {result.stderr}")
 
@@ -303,10 +313,12 @@ class Transcriber:
         if not output.strip():
             # Extract transcription from stderr (filter out whisper_ logs)
             lines = result.stderr.splitlines()
-            text_lines = [l for l in lines if not l.startswith(('whisper_', 'system_info', 'main:'))]
+            text_lines = [
+                line for line in lines if not line.startswith(("whisper_", "system_info", "main:"))
+            ]
             # Also filter timestamp lines like [00:00:00.000 --> 00:00:02.000]
-            text_lines = [l for l in text_lines if not l.strip().startswith('[')]
-            output = '\n'.join(text_lines)
+            text_lines = [line for line in text_lines if not line.strip().startswith("[")]
+            output = "\n".join(text_lines)
 
         debug(f"Final output: {output[:100] if output else 'EMPTY'}")
 
@@ -315,12 +327,17 @@ class Transcriber:
     def _transcribe_server(self, audio_path: str) -> str:
         """Use whisper.cpp server"""
         cmd = [
-            'curl', '-s',
-            f'http://{self.config.whisper_server}/inference',
-            '-H', 'Content-Type: multipart/form-data',
-            '-F', f'file=@{audio_path}',
-            '-F', 'temperature=0.0',
-            '-F', 'response_format=text'
+            "curl",
+            "-s",
+            f"http://{self.config.whisper_server}/inference",
+            "-H",
+            "Content-Type: multipart/form-data",
+            "-F",
+            f"file=@{audio_path}",
+            "-F",
+            "temperature=0.0",
+            "-F",
+            "response_format=text",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -332,16 +349,20 @@ class Transcriber:
 
     def _transcribe_openai(self, audio_path: str) -> str:
         """Use OpenAI Whisper API"""
-        api_key = self.config.openai_api_key or os.environ.get('OPENAI_API_KEY')
+        api_key = self.config.openai_api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OpenAI API key not configured. Set OPENAI_API_KEY env var.")
 
         cmd = [
-            'curl', '-s',
-            'https://api.openai.com/v1/audio/transcriptions',
-            '-H', f'Authorization: Bearer {api_key}',
-            '-F', f'file=@{audio_path}',
-            '-F', 'model=whisper-1'
+            "curl",
+            "-s",
+            "https://api.openai.com/v1/audio/transcriptions",
+            "-H",
+            f"Authorization: Bearer {api_key}",
+            "-F",
+            f"file=@{audio_path}",
+            "-F",
+            "model=whisper-1",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -350,17 +371,19 @@ class Transcriber:
             raise RuntimeError(f"OpenAI transcription failed: {result.stderr}")
 
         import json
+
         try:
             data = json.loads(result.stdout)
-            return self._clean_text(data.get('text', ''))
+            return self._clean_text(data.get("text", ""))
         except json.JSONDecodeError:
             return self._clean_text(result.stdout)
 
     def _clean_text(self, text: str) -> str:
         """Clean up transcribed text"""
         import re
-        text = re.sub(r'\([^)]*\)', '', text)  # (wind blowing)
-        text = re.sub(r'\[[^\]]*\]', '', text)  # [MUSIC]
+
+        text = re.sub(r"\([^)]*\)", "", text)  # (wind blowing)
+        text = re.sub(r"\[[^\]]*\]", "", text)  # [MUSIC]
         text = text.strip()
 
         if text:
@@ -374,7 +397,7 @@ class Whispr:
 
     MAX_HISTORY = 10  # Maximum transcriptions to keep in history
 
-    def __init__(self, config: Optional[WhisprConfig] = None, tray_mode: bool = False):
+    def __init__(self, config: WhisprConfig | None = None, tray_mode: bool = False):
         self.config = config or WhisprConfig.load()
         self.state = WhisprState.IDLE
         self.recorder = AudioRecorder(self.config.sample_rate, self.config.channels)
@@ -382,12 +405,12 @@ class Whispr:
         self.tray_mode = tray_mode
 
         # Key tracking
-        self.key_press_time: Optional[float] = None
+        self.key_press_time: float | None = None
         self.trigger_pressed = False
         self.trigger_keys = self._get_trigger_keys()
 
         # GTK
-        self.app: Optional[Gtk.Application] = None
+        self.app: Gtk.Application | None = None
         self.overlay = None  # WhisprOverlay (GTK4 mode only)
 
         # Tray (GTK3 mode only)
@@ -395,7 +418,7 @@ class Whispr:
         self.settings_dialog = None
 
         # Transcription history
-        self._transcription_history: List[str] = []
+        self._transcription_history: list[str] = []
 
         # Threading
         self._lock = threading.Lock()
@@ -403,7 +426,7 @@ class Whispr:
 
     # --- Transcription History ---
 
-    def get_recent_transcriptions(self) -> List[str]:
+    def get_recent_transcriptions(self) -> list[str]:
         """Get recent transcription history"""
         return self._transcription_history.copy()
 
@@ -412,7 +435,7 @@ class Whispr:
         if text:
             self._transcription_history.insert(0, text)
             # Trim to max size
-            self._transcription_history = self._transcription_history[:self.MAX_HISTORY]
+            self._transcription_history = self._transcription_history[: self.MAX_HISTORY]
             # Notify tray
             if self.tray:
                 self.tray.on_transcription_complete(text)
@@ -430,6 +453,7 @@ class Whispr:
             return
 
         from settings import WhisprSettingsDialog
+
         self.settings_dialog = WhisprSettingsDialog(self)
         self.settings_dialog.connect("destroy", self._on_settings_closed)
         self.settings_dialog.show_all()
@@ -469,12 +493,12 @@ Hidden=false
         """Update tray icon based on current state"""
         if self.tray:
             state_map = {
-                WhisprState.IDLE: 'idle',
-                WhisprState.WAITING: 'idle',
-                WhisprState.RECORDING: 'recording',
-                WhisprState.TRANSCRIBING: 'transcribing'
+                WhisprState.IDLE: "idle",
+                WhisprState.WAITING: "idle",
+                WhisprState.RECORDING: "recording",
+                WhisprState.TRANSCRIBING: "transcribing",
             }
-            self.tray.set_state(state_map.get(self.state, 'idle'))
+            self.tray.set_state(state_map.get(self.state, "idle"))
 
     def toggle_recording(self):
         """Toggle recording on/off (for tray menu)"""
@@ -488,30 +512,31 @@ Hidden=false
 
     def _get_trigger_keys(self) -> list:
         """Get normalized list of trigger key names"""
-        return [k.strip().lower() for k in self.config.trigger_keys.split(',')]
+        return [k.strip().lower() for k in self.config.trigger_keys.split(",")]
 
     def _is_trigger_key(self, key) -> bool:
         """Check if pressed key is one of our triggers"""
         for trigger in self.trigger_keys:
-            if trigger in ('ctrl', 'control'):
+            if trigger in ("ctrl", "control"):
                 if key in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
                     return True
-            elif trigger == 'alt':
+            elif trigger == "alt":
                 if key in (Key.alt, Key.alt_l, Key.alt_r):
                     return True
-            elif trigger in ('super', 'meta', 'cmd'):
+            elif trigger in ("super", "meta", "cmd"):
                 if key in (Key.cmd, Key.cmd_l, Key.cmd_r):
                     return True
-            elif trigger == 'print_screen':
-                if key == Key.print_screen:
-                    return True
+            elif trigger == "print_screen" and key == Key.print_screen:
+                return True
 
         return False
 
     def _on_key_press(self, key):
         """Handle key press"""
         # Debug: show what key was pressed
-        debug(f"Key pressed: {key}, trigger_keys={self.trigger_keys}, is_trigger={self._is_trigger_key(key)}")
+        debug(
+            f"Key pressed: {key}, trigger_keys={self.trigger_keys}, is_trigger={self._is_trigger_key(key)}"
+        )
 
         if not self._is_trigger_key(key):
             return
@@ -532,8 +557,7 @@ Hidden=false
 
                 # Schedule activation check
                 self._activation_source = GLib.timeout_add(
-                    int(self.config.hold_duration * 1000),
-                    self._check_activation
+                    int(self.config.hold_duration * 1000), self._check_activation
                 )
 
     def _on_key_release(self, key):
@@ -593,7 +617,7 @@ Hidden=false
             GLib.idle_add(self.overlay.show_recording)
 
         # Play start sound
-        self._play_sound('start')
+        self._play_sound("start")
 
         debug("Recording...")
 
@@ -630,10 +654,11 @@ Hidden=false
         except Exception as e:
             print(f"Transcription error: {e}", file=sys.stderr)
             import traceback
+
             traceback.print_exc()
             GLib.idle_add(self._finish, None, str(e))
 
-    def _finish(self, text: Optional[str], error: Optional[str] = None):
+    def _finish(self, text: str | None, error: str | None = None):
         """Finish transcription and output result"""
         if self.overlay:
             self.overlay.hide_overlay()
@@ -644,7 +669,7 @@ Hidden=false
 
         if error:
             self._notify("Whispr", f"Error: {error}")
-            self._play_sound('error')
+            self._play_sound("error")
             return
 
         if not text:
@@ -667,7 +692,7 @@ Hidden=false
             self._copy_to_clipboard(text)
 
         # Success sound
-        self._play_sound('success')
+        self._play_sound("success")
 
         # Notification with preview
         preview = text[:80] + "..." if len(text) > 80 else text
@@ -675,7 +700,7 @@ Hidden=false
 
     def _copy_to_clipboard(self, text: str):
         """Copy text to clipboard"""
-        for cmd in [['xsel', '-ib'], ['xclip', '-selection', 'clipboard']]:
+        for cmd in [["xsel", "-ib"], ["xclip", "-selection", "clipboard"]]:
             try:
                 subprocess.run(cmd, input=text.encode(), check=True)
                 return
@@ -688,8 +713,7 @@ Hidden=false
         try:
             # Get active window ID
             result = subprocess.run(
-                ['xdotool', 'getactivewindow'],
-                capture_output=True, text=True, timeout=1
+                ["xdotool", "getactivewindow"], capture_output=True, text=True, timeout=1
             )
             if result.returncode != 0:
                 return ""
@@ -697,15 +721,14 @@ Hidden=false
 
             # Get WM_CLASS using xprop
             result = subprocess.run(
-                ['xprop', '-id', window_id, 'WM_CLASS'],
-                capture_output=True, text=True, timeout=1
+                ["xprop", "-id", window_id, "WM_CLASS"], capture_output=True, text=True, timeout=1
             )
             if result.returncode == 0:
                 # Parse: WM_CLASS(STRING) = "instance", "class"
                 output = result.stdout.lower()
                 debug(f"Window WM_CLASS: {output.strip()}")
                 return output
-        except:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
         return ""
 
@@ -717,17 +740,36 @@ Hidden=false
 
         # Common terminal emulators
         terminals = [
-            'gnome-terminal', 'konsole', 'xterm', 'urxvt', 'rxvt',
-            'terminator', 'tilix', 'alacritty', 'kitty', 'st-256color',
-            'xfce4-terminal', 'mate-terminal', 'lxterminal',
-            'terminology', 'guake', 'yakuake', 'tilda', 'termite',
-            'hyper', 'wezterm', 'foot', 'contour', 'cool-retro-term',
-            'qterminal', 'sakura', 'roxterm', 'evilvte', 'lilyterm',
+            "gnome-terminal",
+            "konsole",
+            "xterm",
+            "urxvt",
+            "rxvt",
+            "terminator",
+            "tilix",
+            "alacritty",
+            "kitty",
+            "st-256color",
+            "xfce4-terminal",
+            "mate-terminal",
+            "lxterminal",
+            "terminology",
+            "guake",
+            "yakuake",
+            "tilda",
+            "termite",
+            "hyper",
+            "wezterm",
+            "foot",
+            "contour",
+            "cool-retro-term",
+            "qterminal",
+            "sakura",
+            "roxterm",
+            "evilvte",
+            "lilyterm",
         ]
-        for term in terminals:
-            if term in window_class:
-                return True
-        return False
+        return any(term in window_class for term in terminals)
 
     def _paste(self, text: str = None):
         """Paste text at cursor using multiple strategies for reliability"""
@@ -739,16 +781,23 @@ Hidden=false
         try:
             # First, ensure all modifier keys are released
             debug("Releasing modifier keys...")
-            subprocess.run(['xdotool', 'keyup', 'ctrl', 'alt', 'shift', 'super', 'Print'],
-                          check=False, timeout=1)
+            subprocess.run(
+                ["xdotool", "keyup", "ctrl", "alt", "shift", "super", "Print"],
+                check=False,
+                timeout=1,
+            )
             time.sleep(0.15)
 
             # Get active window info for debugging
             try:
-                result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'],
-                                       capture_output=True, text=True, timeout=1)
+                result = subprocess.run(
+                    ["xdotool", "getactivewindow", "getwindowname"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1,
+                )
                 debug(f"Active window: {result.stdout.strip()}")
-            except:
+            except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
 
             # Detect if we're in a terminal
@@ -760,69 +809,89 @@ Hidden=false
                 # Save current clipboard
                 saved_clipboard = None
                 try:
-                    result = subprocess.run(['xsel', '-ob'], capture_output=True, timeout=1)
+                    result = subprocess.run(["xsel", "-ob"], capture_output=True, timeout=1)
                     if result.returncode == 0:
                         saved_clipboard = result.stdout
                         debug(f"Saved clipboard: {len(saved_clipboard)} bytes")
-                except:
+                except (
+                    FileNotFoundError,
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                ):
                     pass
 
                 # Set clipboard and paste
-                debug(f"Setting clipboard for terminal paste...")
-                subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
+                debug("Setting clipboard for terminal paste...")
+                subprocess.run(["xsel", "-ib"], input=text.encode(), check=True, timeout=1)
                 time.sleep(0.05)
 
                 debug("Pasting with ctrl+shift+v...")
-                subprocess.run(
-                    ['xdotool', 'key', 'ctrl+shift+v'],
-                    check=True, timeout=2
-                )
+                subprocess.run(["xdotool", "key", "ctrl+shift+v"], check=True, timeout=2)
                 debug("Terminal paste complete")
 
                 # Restore clipboard
                 if saved_clipboard is not None:
+
                     def restore_clipboard():
                         time.sleep(0.5)
                         try:
-                            subprocess.run(['xsel', '-ib'], input=saved_clipboard, check=True, timeout=1)
+                            subprocess.run(
+                                ["xsel", "-ib"], input=saved_clipboard, check=True, timeout=1
+                            )
                             debug("Clipboard restored")
-                        except:
+                        except (
+                            FileNotFoundError,
+                            subprocess.CalledProcessError,
+                            subprocess.TimeoutExpired,
+                        ):
                             pass
+
                     threading.Thread(target=restore_clipboard, daemon=True).start()
             else:
                 # For GUI apps, use clipboard paste (faster for long text)
                 # Save current clipboard contents
                 saved_clipboard = None
                 try:
-                    result = subprocess.run(['xsel', '-ob'], capture_output=True, timeout=1)
+                    result = subprocess.run(["xsel", "-ob"], capture_output=True, timeout=1)
                     if result.returncode == 0:
                         saved_clipboard = result.stdout
                         debug(f"Saved clipboard: {len(saved_clipboard)} bytes")
-                except:
+                except (
+                    FileNotFoundError,
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                ):
                     pass
 
                 # Put our text in clipboard
                 debug(f"Setting clipboard to: {text[:30]}...")
-                subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
+                subprocess.run(["xsel", "-ib"], input=text.encode(), check=True, timeout=1)
                 time.sleep(0.05)
 
                 # Paste with Ctrl+V
                 debug("Pasting with ctrl+v...")
                 subprocess.run(
-                    ['xdotool', 'key', '--clearmodifiers', 'ctrl+v'],
-                    check=True, timeout=2
+                    ["xdotool", "key", "--clearmodifiers", "ctrl+v"], check=True, timeout=2
                 )
                 debug("Paste complete")
 
                 # Restore original clipboard after a delay
                 if saved_clipboard is not None:
+
                     def restore_clipboard():
                         time.sleep(0.5)
                         try:
-                            subprocess.run(['xsel', '-ib'], input=saved_clipboard, check=True, timeout=1)
+                            subprocess.run(
+                                ["xsel", "-ib"], input=saved_clipboard, check=True, timeout=1
+                            )
                             debug("Clipboard restored")
-                        except:
+                        except (
+                            FileNotFoundError,
+                            subprocess.CalledProcessError,
+                            subprocess.TimeoutExpired,
+                        ):
                             pass
+
                     threading.Thread(target=restore_clipboard, daemon=True).start()
 
         except FileNotFoundError:
@@ -836,13 +905,13 @@ Hidden=false
         """Show desktop notification"""
         if not self.config.show_notifications:
             return
-        try:
+        import contextlib
+
+        with contextlib.suppress(FileNotFoundError):
             subprocess.run(
-                ['notify-send', '-t', '3000', '-a', 'Whispr', '-i', 'whispr', title, message],
-                check=True
+                ["notify-send", "-t", "3000", "-a", "Whispr", "-i", "whispr", title, message],
+                check=True,
             )
-        except FileNotFoundError:
-            pass
 
     def _play_sound(self, sound_type: str):
         """Play feedback sound"""
@@ -850,21 +919,19 @@ Hidden=false
             return
 
         sounds = {
-            'start': '/usr/share/sounds/freedesktop/stereo/device-added.oga',
-            'success': '/usr/share/sounds/freedesktop/stereo/complete.oga',
-            'error': '/usr/share/sounds/freedesktop/stereo/dialog-error.oga'
+            "start": "/usr/share/sounds/freedesktop/stereo/device-added.oga",
+            "success": "/usr/share/sounds/freedesktop/stereo/complete.oga",
+            "error": "/usr/share/sounds/freedesktop/stereo/dialog-error.oga",
         }
 
         sound_file = sounds.get(sound_type)
         if sound_file and Path(sound_file).exists():
-            try:
+            import contextlib
+
+            with contextlib.suppress(FileNotFoundError):
                 subprocess.Popen(
-                    ['paplay', sound_file],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    ["paplay", sound_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-            except FileNotFoundError:
-                pass
 
     def _on_activate(self, app):
         """GTK application activation (GTK4 mode only)"""
@@ -879,6 +946,7 @@ Hidden=false
         # Create tray icon
         if HAS_APPINDICATOR:
             from tray import WhisprTray
+
             self.tray = WhisprTray(self)
 
         self._start_listener()
@@ -886,19 +954,16 @@ Hidden=false
     def _start_listener(self):
         """Start key listener and show startup message"""
         # Start key listener in background thread
-        listener = keyboard.Listener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release
-        )
+        listener = keyboard.Listener(on_press=self._on_key_press, on_release=self._on_key_release)
         listener.start()
 
-        key_names = [k.upper().replace('_', ' ') for k in self.trigger_keys]
+        key_names = [k.upper().replace("_", " ") for k in self.trigger_keys]
         keys_str = " or ".join(key_names)
         hold_time = self.config.hold_duration
 
-        print(f"Whispr running!", file=sys.stderr)
+        print("Whispr running!", file=sys.stderr)
         print(f"  Hold {keys_str} for {hold_time}s to start recording", file=sys.stderr)
-        print(f"  Release to transcribe and paste", file=sys.stderr)
+        print("  Release to transcribe and paste", file=sys.stderr)
 
         self._notify("Whispr Ready", f"Hold {keys_str} for {hold_time}s to record")
 
@@ -911,8 +976,8 @@ Hidden=false
 
     def _run_overlay_mode(self):
         """Run with GTK4 overlay (no tray)"""
-        self.app = Gtk.Application(application_id='com.whispr.app')
-        self.app.connect('activate', self._on_activate)
+        self.app = Gtk.Application(application_id="com.whispr.app")
+        self.app.connect("activate", self._on_activate)
         self.app.hold()  # Keep running without visible windows
 
         # Handle Ctrl+C gracefully
@@ -922,8 +987,8 @@ Hidden=false
 
     def _run_tray_mode(self):
         """Run with GTK3 tray icon"""
-        self.app = Gtk.Application(application_id='com.whispr.app')
-        self.app.connect('activate', self._on_activate_gtk3)
+        self.app = Gtk.Application(application_id="com.whispr.app")
+        self.app.connect("activate", self._on_activate_gtk3)
         self.app.hold()
 
         # Handle Ctrl+C gracefully
@@ -942,33 +1007,31 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Whispr - WisprFlow-style speech-to-text for Linux',
+        description="Whispr - WisprFlow-style speech-to-text for Linux",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   whispr                      # Use defaults (Alt key, 0.5s hold)
   whispr --tray               # Run with system tray icon
   whispr --keys ctrl --hold 1 # Use Ctrl key with 1 second hold
   whispr --server 127.0.0.1:58080  # Use whisper.cpp server
   whispr --openai             # Use OpenAI Whisper API
-'''
+""",
     )
-    parser.add_argument('--tray', action='store_true',
-                       help='Run with system tray icon (GTK3 mode)')
-    parser.add_argument('--keys', default=None,
-                       help='Trigger keys, comma-separated (default: alt,print_screen)')
-    parser.add_argument('--hold', type=float, default=None,
-                       help='Hold duration in seconds (default: 0.5)')
-    parser.add_argument('--server',
-                       help='Whisper.cpp server address (IP:PORT)')
-    parser.add_argument('--openai', action='store_true',
-                       help='Use OpenAI Whisper API')
-    parser.add_argument('--no-paste', action='store_true',
-                       help='Disable auto-paste')
-    parser.add_argument('--save-config', action='store_true',
-                       help='Save current options as default config')
-    parser.add_argument('--debug', action='store_true',
-                       help='Enable debug output')
+    parser.add_argument("--tray", action="store_true", help="Run with system tray icon (GTK3 mode)")
+    parser.add_argument(
+        "--keys", default=None, help="Trigger keys, comma-separated (default: alt,print_screen)"
+    )
+    parser.add_argument(
+        "--hold", type=float, default=None, help="Hold duration in seconds (default: 0.5)"
+    )
+    parser.add_argument("--server", help="Whisper.cpp server address (IP:PORT)")
+    parser.add_argument("--openai", action="store_true", help="Use OpenAI Whisper API")
+    parser.add_argument("--no-paste", action="store_true", help="Disable auto-paste")
+    parser.add_argument(
+        "--save-config", action="store_true", help="Save current options as default config"
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
 
     args = parser.parse_args()
 
@@ -991,11 +1054,11 @@ Examples:
 
     if args.save_config:
         config.save()
-        print(f"Config saved to ~/.config/whispr/config.py", file=sys.stderr)
+        print("Config saved to ~/.config/whispr/config.py", file=sys.stderr)
 
     whispr = Whispr(config, tray_mode=args.tray)
     whispr.run()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

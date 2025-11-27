@@ -5,12 +5,13 @@ Designed to be minimal yet informative, like WisprFlow
 """
 
 import math
-import cairo
 
+import cairo
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gdk', '4.0')
-from gi.repository import Gtk, Gdk, GLib, Graphene
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 
 class WhisprOverlay(Gtk.Window):
@@ -61,9 +62,7 @@ class WhisprOverlay(Gtk.Window):
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
-            provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
     def _draw(self, area, cr, width, height):
@@ -168,12 +167,7 @@ class WhisprOverlay(Gtk.Window):
             cr.set_source_rgba(r, g, b, 0.9)
 
             # Draw rounded bar
-            self._draw_rounded_rect(
-                cr,
-                x, wave_y - bar_height / 2,
-                bar_width, bar_height,
-                2
-            )
+            self._draw_rounded_rect(cr, x, wave_y - bar_height / 2, bar_width, bar_height, 2)
             cr.fill()
 
         # "Recording" text
@@ -247,15 +241,14 @@ class WhisprOverlay(Gtk.Window):
         if display:
             monitors = display.get_monitors()
             if monitors.get_n_items() > 0:
-                monitor = monitors.get_item(0)
-                geom = monitor.get_geometry()
-
+                _monitor = monitors.get_item(0)
                 # Position at bottom center
-                x = geom.x + (geom.width - 200) // 2
-                y = geom.y + geom.height - 150
-
                 # GTK4 doesn't have move(), we need to use surface API
+                # geom = monitor.get_geometry()
+                # x = geom.x + (geom.width - 200) // 2
+                # y = geom.y + geom.height - 150
                 # For now, rely on window manager
+                pass
 
     def _start_animation(self):
         """Start animation loop"""
@@ -275,6 +268,7 @@ class WhisprOverlay(Gtk.Window):
         # Simulate audio levels when recording (will be replaced with real data)
         if self.is_recording:
             import random
+
             # Add some natural-looking variation
             base = 0.3 + 0.4 * math.sin(self.animation_phase * 0.5)
             noise = random.uniform(-0.15, 0.15)
@@ -285,10 +279,8 @@ class WhisprOverlay(Gtk.Window):
 
 
 # Standalone test
-if __name__ == '__main__':
-    import sys
-
-    app = Gtk.Application(application_id='com.whispr.overlay.test')
+if __name__ == "__main__":
+    app = Gtk.Application(application_id="com.whispr.overlay.test")
 
     def on_activate(app):
         overlay = WhisprOverlay()
@@ -308,5 +300,5 @@ if __name__ == '__main__':
         GLib.timeout_add(3000, switch_to_transcribing)
         GLib.timeout_add(5000, hide)
 
-    app.connect('activate', on_activate)
+    app.connect("activate", on_activate)
     app.run()

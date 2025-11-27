@@ -3,15 +3,14 @@
 Whispr System Tray - AppIndicator integration for GNOME/Pop!_OS
 """
 
-import os
 import subprocess
 from pathlib import Path
-from typing import Optional, Callable, List
 
 import gi
-gi.require_version('Gtk', '3.0')
-gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, GLib, AppIndicator3
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("AppIndicator3", "0.1")
+from gi.repository import AppIndicator3, GLib, Gtk  # noqa: E402
 
 
 class WhisprTray:
@@ -48,7 +47,9 @@ class WhisprTray:
             return str(local_path)
 
         # Check installed location
-        installed_path = Path.home() / ".local/share/icons/hicolor/scalable/apps" / f"{icon_name}.svg"
+        installed_path = (
+            Path.home() / ".local/share/icons/hicolor/scalable/apps" / f"{icon_name}.svg"
+        )
         if installed_path.exists():
             return str(installed_path)
 
@@ -60,7 +61,7 @@ class WhisprTray:
         self.indicator = AppIndicator3.Indicator.new(
             "whispr",
             self._get_icon_path(self.ICON_IDLE),
-            AppIndicator3.IndicatorCategory.APPLICATION_STATUS
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS,
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Whispr")
@@ -123,10 +124,14 @@ class WhisprTray:
             self.recent_menu.remove(child)
 
         # Get recent transcriptions from whispr
-        recent = self.whispr.get_recent_transcriptions() if hasattr(self.whispr, 'get_recent_transcriptions') else []
+        recent = (
+            self.whispr.get_recent_transcriptions()
+            if hasattr(self.whispr, "get_recent_transcriptions")
+            else []
+        )
 
         if recent:
-            for i, text in enumerate(recent[:5]):
+            for _i, text in enumerate(recent[:5]):
                 # Truncate long text
                 display_text = text[:40] + "..." if len(text) > 40 else text
                 display_text = display_text.replace("\n", " ")
@@ -153,26 +158,26 @@ class WhisprTray:
 
     def _on_record_clicked(self, widget):
         """Handle record button click"""
-        if hasattr(self.whispr, 'toggle_recording'):
+        if hasattr(self.whispr, "toggle_recording"):
             self.whispr.toggle_recording()
 
     def _on_recent_clicked(self, widget, text: str):
         """Copy recent transcription to clipboard"""
         try:
-            subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
+            subprocess.run(["xsel", "-ib"], input=text.encode(), check=True, timeout=1)
             self.whispr._notify("Whispr", "Copied to clipboard")
-        except:
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
 
     def _on_clear_history(self, widget):
         """Clear transcription history"""
-        if hasattr(self.whispr, 'clear_transcription_history'):
+        if hasattr(self.whispr, "clear_transcription_history"):
             self.whispr.clear_transcription_history()
         self._update_recent_menu()
 
     def _on_autostart_toggled(self, widget):
         """Toggle autostart"""
-        if hasattr(self.whispr, 'set_autostart'):
+        if hasattr(self.whispr, "set_autostart"):
             self.whispr.set_autostart(widget.get_active())
         else:
             self._set_autostart(widget.get_active())
@@ -188,6 +193,7 @@ class WhisprTray:
             source_file = Path(__file__).parent / "whispr-autostart.desktop"
             if source_file.exists():
                 import shutil
+
                 shutil.copy(source_file, autostart_file)
             else:
                 # Create basic autostart file
@@ -207,7 +213,7 @@ Hidden=false
 
     def _on_settings_clicked(self, widget):
         """Open settings dialog"""
-        if hasattr(self.whispr, 'show_settings'):
+        if hasattr(self.whispr, "show_settings"):
             self.whispr.show_settings()
 
     def _on_quit_clicked(self, widget):
@@ -222,25 +228,18 @@ Hidden=false
         Args:
             state: One of 'idle', 'waiting', 'recording', 'transcribing'
         """
-        if state == 'recording':
-            self.indicator.set_icon_full(
-                self._get_icon_path(self.ICON_RECORDING),
-                "Recording"
-            )
+        if state == "recording":
+            self.indicator.set_icon_full(self._get_icon_path(self.ICON_RECORDING), "Recording")
             GLib.idle_add(self._update_status, "Recording...")
             GLib.idle_add(self._update_record_label, "Stop Recording")
-        elif state == 'transcribing':
+        elif state == "transcribing":
             self.indicator.set_icon_full(
-                self._get_icon_path(self.ICON_TRANSCRIBING),
-                "Transcribing"
+                self._get_icon_path(self.ICON_TRANSCRIBING), "Transcribing"
             )
             GLib.idle_add(self._update_status, "Transcribing...")
             GLib.idle_add(self._update_record_label, "Processing...")
         else:  # idle or waiting
-            self.indicator.set_icon_full(
-                self._get_icon_path(self.ICON_IDLE),
-                "Ready"
-            )
+            self.indicator.set_icon_full(self._get_icon_path(self.ICON_IDLE), "Ready")
             GLib.idle_add(self._update_status, "Whispr Ready")
             GLib.idle_add(self._update_record_label, "Start Recording")
 
