@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Whispr - WisprFlow-style speech-to-text for Linux
-Hold Alt key to record, release to transcribe and paste.
+Hold Alt or Print Screen key to record, release to transcribe and paste.
 
 Features:
 - Hold-to-talk activation (configurable key and duration)
@@ -48,7 +48,7 @@ from overlay import WhisprOverlay
 class WhisprConfig:
     """Configuration for Whispr"""
     # Activation
-    trigger_key: str = "alt"  # ctrl, alt, super
+    trigger_keys: str = "alt,print_screen"  # Comma-separated: ctrl, alt, super, print_screen
     hold_duration: float = 0.5  # seconds to hold before activating
 
     # Audio
@@ -83,6 +83,9 @@ class WhisprConfig:
                 for key, value in config_vars.items():
                     if hasattr(config, key):
                         setattr(config, key, value)
+                # Backwards compatibility: old trigger_key -> new trigger_keys
+                if 'trigger_key' in config_vars and 'trigger_keys' not in config_vars:
+                    config.trigger_keys = config_vars['trigger_key']
             except Exception as e:
                 print(f"Error loading config: {e}", file=sys.stderr)
 
@@ -127,8 +130,8 @@ class WhisprConfig:
         content = f'''# Whispr Configuration
 # Edit this file to customize Whispr behavior
 
-# Trigger key: "ctrl", "alt", or "super"
-trigger_key = "{self.trigger_key}"
+# Trigger keys (comma-separated): "ctrl", "alt", "super", "print_screen"
+trigger_keys = "{self.trigger_keys}"
 
 # How long to hold the key before recording starts (seconds)
 hold_duration = {self.hold_duration}
@@ -354,8 +357,8 @@ class Whispr:
 
         # Key tracking
         self.key_press_time: Optional[float] = None
-        self.ctrl_pressed = False
-        self.trigger_key = self._get_trigger_key()
+        self.trigger_pressed = False
+        self.trigger_keys = self._get_trigger_keys()
 
         # GTK
         self.app: Optional[Gtk.Application] = None
@@ -365,36 +368,41 @@ class Whispr:
         self._lock = threading.Lock()
         self._activation_source = None
 
-    def _get_trigger_key(self) -> str:
-        """Get normalized trigger key name"""
-        return self.config.trigger_key.lower()
+    def _get_trigger_keys(self) -> list:
+        """Get normalized list of trigger key names"""
+        return [k.strip().lower() for k in self.config.trigger_keys.split(',')]
 
     def _is_trigger_key(self, key) -> bool:
-        """Check if pressed key is our trigger"""
-        trigger = self.trigger_key
-
-        if trigger in ('ctrl', 'control'):
-            return key in (Key.ctrl, Key.ctrl_l, Key.ctrl_r)
-        elif trigger == 'alt':
-            return key in (Key.alt, Key.alt_l, Key.alt_r)
-        elif trigger in ('super', 'meta', 'cmd'):
-            return key in (Key.cmd, Key.cmd_l, Key.cmd_r)
+        """Check if pressed key is one of our triggers"""
+        for trigger in self.trigger_keys:
+            if trigger in ('ctrl', 'control'):
+                if key in (Key.ctrl, Key.ctrl_l, Key.ctrl_r):
+                    return True
+            elif trigger == 'alt':
+                if key in (Key.alt, Key.alt_l, Key.alt_r):
+                    return True
+            elif trigger in ('super', 'meta', 'cmd'):
+                if key in (Key.cmd, Key.cmd_l, Key.cmd_r):
+                    return True
+            elif trigger == 'print_screen':
+                if key == Key.print_screen:
+                    return True
 
         return False
 
     def _on_key_press(self, key):
         """Handle key press"""
         # Debug: show what key was pressed
-        debug(f"Key pressed: {key}, trigger_key={self.trigger_key}, is_trigger={self._is_trigger_key(key)}")
+        debug(f"Key pressed: {key}, trigger_keys={self.trigger_keys}, is_trigger={self._is_trigger_key(key)}")
 
         if not self._is_trigger_key(key):
             return
 
         with self._lock:
-            if self.ctrl_pressed:
+            if self.trigger_pressed:
                 return  # Already pressed
 
-            self.ctrl_pressed = True
+            self.trigger_pressed = True
 
             if self.state == WhisprState.IDLE:
                 self.key_press_time = time.time()
@@ -416,7 +424,7 @@ class Whispr:
             return
 
         with self._lock:
-            self.ctrl_pressed = False
+            self.trigger_pressed = False
 
             if self.state == WhisprState.WAITING:
                 # Released before activation
@@ -437,7 +445,7 @@ class Whispr:
             if self.state != WhisprState.WAITING:
                 return False
 
-            if not self.ctrl_pressed:
+            if not self.trigger_pressed:
                 self.state = WhisprState.IDLE
                 return False
 
@@ -524,22 +532,15 @@ class Whispr:
 
         debug(f"Result: {text}")
 
-        # Always copy to clipboard (clear and replace)
-        debug(f"Copying to clipboard: {text[:50]}...")
-        self._copy_to_clipboard(text)
-
-        # Verify clipboard
-        try:
-            result = subprocess.run(['xsel', '-ob'], capture_output=True, text=True)
-            debug(f"Clipboard now contains: {result.stdout[:50]}...")
-        except:
-            pass
-
-        # Auto paste - type text directly at cursor
+        # Auto-type text directly at cursor (without touching clipboard)
         if self.config.auto_paste:
             debug("Will type text in 250ms")
             # Delay to ensure modifier keys are fully released
             GLib.timeout_add(250, lambda: self._paste(text) or False)
+        elif self.config.copy_to_clipboard:
+            # Only copy to clipboard if not auto-pasting
+            debug(f"Copying to clipboard: {text[:50]}...")
+            self._copy_to_clipboard(text)
 
         # Success sound
         self._play_sound('success')
@@ -559,35 +560,56 @@ class Whispr:
         print("Warning: No clipboard tool found", file=sys.stderr)
 
     def _paste(self, text: str = None):
-        """Type text directly or paste from clipboard"""
+        """Paste text at cursor, preserving clipboard contents"""
         debug(f"_paste called with text length: {len(text) if text else 0}")
         try:
             # First, ensure all modifier keys are released
             debug("Releasing modifier keys...")
-            subprocess.run(['xdotool', 'keyup', 'ctrl', 'alt', 'shift', 'super'], check=False)
-            time.sleep(0.15)
+            subprocess.run(['xdotool', 'keyup', 'ctrl', 'alt', 'shift', 'super', 'Print'], check=False)
+            time.sleep(0.1)
 
             if text:
-                # Type text directly (more reliable than clipboard paste)
-                debug(f"Typing text: {text[:30]}...")
-                result = subprocess.run(
-                    ['xdotool', 'type', '--clearmodifiers', '--delay', '10', '--', text],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    debug(f"xdotool type failed: {result.stderr}")
-                else:
-                    debug("xdotool type succeeded")
+                # Save current clipboard contents
+                saved_clipboard = None
+                try:
+                    result = subprocess.run(['xsel', '-ob'], capture_output=True, timeout=1)
+                    if result.returncode == 0:
+                        saved_clipboard = result.stdout
+                        debug(f"Saved clipboard: {len(saved_clipboard)} bytes")
+                except:
+                    pass
+
+                # Put our text in clipboard
+                debug(f"Setting clipboard to: {text[:30]}...")
+                subprocess.run(['xsel', '-ib'], input=text.encode(), check=True, timeout=1)
+
+                # Small delay then paste
+                time.sleep(0.05)
+                debug("Pasting with Ctrl+V...")
+                subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+v'], check=True, timeout=2)
+                debug("Paste complete")
+
+                # Restore original clipboard after a delay
+                if saved_clipboard is not None:
+                    def restore_clipboard():
+                        time.sleep(0.5)
+                        try:
+                            subprocess.run(['xsel', '-ib'], input=saved_clipboard, check=True, timeout=1)
+                            debug("Clipboard restored")
+                        except:
+                            pass
+                    threading.Thread(target=restore_clipboard, daemon=True).start()
             else:
-                # Fallback to clipboard paste
+                # Just paste from clipboard
                 debug("Using Ctrl+V paste")
                 subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+v'], check=True)
 
         except FileNotFoundError:
-            print("xdotool not found, cannot auto-paste", file=sys.stderr)
+            print("xdotool or xsel not found, cannot auto-paste", file=sys.stderr)
         except subprocess.CalledProcessError as e:
             print(f"Paste failed: {e}", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            print("Paste timed out", file=sys.stderr)
 
     def _notify(self, title: str, message: str):
         """Show desktop notification"""
@@ -630,14 +652,15 @@ class Whispr:
         )
         listener.start()
 
-        key_name = self.config.trigger_key.upper()
+        key_names = [k.upper().replace('_', ' ') for k in self.trigger_keys]
+        keys_str = " or ".join(key_names)
         hold_time = self.config.hold_duration
 
         print(f"Whispr running!", file=sys.stderr)
-        print(f"  Hold {key_name} for {hold_time}s to start recording", file=sys.stderr)
+        print(f"  Hold {keys_str} for {hold_time}s to start recording", file=sys.stderr)
         print(f"  Release to transcribe and paste", file=sys.stderr)
 
-        self._notify("Whispr Ready", f"Hold {key_name} for {hold_time}s to record")
+        self._notify("Whispr Ready", f"Hold {keys_str} for {hold_time}s to record")
 
     def run(self):
         """Run the application"""
@@ -671,9 +694,8 @@ Examples:
   whispr --openai             # Use OpenAI Whisper API
 '''
     )
-    parser.add_argument('--key', default='alt',
-                       choices=['ctrl', 'alt', 'super'],
-                       help='Trigger key (default: alt)')
+    parser.add_argument('--keys', default=None,
+                       help='Trigger keys, comma-separated (default: alt,print_screen)')
     parser.add_argument('--hold', type=float, default=0.5,
                        help='Hold duration in seconds (default: 0.5)')
     parser.add_argument('--server',
@@ -694,7 +716,8 @@ Examples:
     DEBUG = args.debug
 
     config = WhisprConfig.load()
-    config.trigger_key = args.key
+    if args.keys:
+        config.trigger_keys = args.keys
     config.hold_duration = args.hold
 
     if args.server:
