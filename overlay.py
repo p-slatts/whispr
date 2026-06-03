@@ -220,6 +220,7 @@ class WhisprOverlay(Gtk.Window):
         self.is_transcribing = False
         self.waveform_data = [0.3] * 20  # Initial waveform
         self._start_animation()
+        self.set_opacity(0)   # hide until positioned
         self.present()
         self._position_top_right()
 
@@ -280,6 +281,7 @@ class WhisprOverlay(Gtk.Window):
                     capture_output=True, timeout=2)
             except Exception:
                 pass
+            GLib.idle_add(lambda: self.set_opacity(1))
             return False  # run once
 
         GLib.timeout_add(60, _move)
