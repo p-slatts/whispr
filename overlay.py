@@ -242,7 +242,8 @@ class WhisprOverlay(Gtk.Window):
         self.waveform_data = self.waveform_data[1:] + [min(1.0, level)]
 
     def _position_top_right(self):
-        """Position overlay top-right, just below the system tray panel."""
+        """Position overlay top-right, just below the system tray panel.
+        Also marks it as a notification window so the WM doesn't tile around it."""
         display = Gdk.Display.get_default()
         if not display:
             return
@@ -257,11 +258,26 @@ class WhisprOverlay(Gtk.Window):
         def _move():
             try:
                 import subprocess
-                subprocess.run(
-                    ['xdotool', 'search', '--sync', '--name', 'Whispr',
-                     'windowmove', str(x), str(y)],
-                    capture_output=True, timeout=2
+                result = subprocess.run(
+                    ['xdotool', 'search', '--sync', '--name', 'Whispr'],
+                    capture_output=True, text=True, timeout=2
                 )
+                xids = result.stdout.strip().splitlines()
+                if not xids:
+                    return False
+                xid = xids[-1]
+                # Float above everything, no tiling
+                subprocess.run(['xprop', '-id', xid,
+                    '-f', '_NET_WM_WINDOW_TYPE', '32a',
+                    '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_NOTIFICATION'],
+                    capture_output=True)
+                subprocess.run(['xprop', '-id', xid,
+                    '-f', '_NET_WM_STATE', '32a',
+                    '-set', '_NET_WM_STATE',
+                    '_NET_WM_STATE_ABOVE,_NET_WM_STATE_SKIP_TASKBAR,_NET_WM_STATE_SKIP_PAGER'],
+                    capture_output=True)
+                subprocess.run(['xdotool', 'windowmove', xid, str(x), str(y)],
+                    capture_output=True, timeout=2)
             except Exception:
                 pass
             return False  # run once
