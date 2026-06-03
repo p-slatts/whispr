@@ -252,7 +252,7 @@ class Transcriber:
                 "  ln -s /path/to/whisper.cpp/whisper-cli ~/.local/bin/transcribe"
             )
 
-        cmd = [transcribe_cmd, '-t', '8', '-nt']
+        cmd = [transcribe_cmd, '-t', '4', '-nt', '-np']
         if self.config.whisper_model:
             cmd.extend(['-m', self.config.whisper_model])
         cmd.extend(['-f', audio_path])
@@ -289,15 +289,30 @@ class Transcriber:
 
         return self._clean_text(output)
 
+    def _audio_ctx_for_file(self, audio_path: str) -> int:
+        """Compute minimum audio_ctx needed for this clip's duration.
+        whisper uses 100 frames/sec; we add 20% headroom and cap at 1500."""
+        try:
+            import wave
+            with wave.open(audio_path, 'rb') as w:
+                duration = w.getnframes() / w.getframerate()
+            frames_needed = int(duration * 100 * 1.2)
+            return max(64, min(frames_needed, 1500))
+        except Exception:
+            return 1500
+
     def _transcribe_server(self, audio_path: str) -> str:
         """Use whisper.cpp server"""
+        audio_ctx = self._audio_ctx_for_file(audio_path)
         cmd = [
             'curl', '-s',
             f'http://{self.config.whisper_server}/inference',
             '-H', 'Content-Type: multipart/form-data',
             '-F', f'file=@{audio_path}',
             '-F', 'temperature=0.0',
-            '-F', 'response_format=text'
+            '-F', 'response_format=text',
+            '-F', 'beam_size=1',
+            '-F', f'audio_ctx={audio_ctx}',
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
