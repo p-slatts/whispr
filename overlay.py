@@ -220,8 +220,8 @@ class WhisprOverlay(Gtk.Window):
         self.is_transcribing = False
         self.waveform_data = [0.3] * 20  # Initial waveform
         self._start_animation()
-        self._center_on_screen()
         self.present()
+        self._position_top_right()
 
     def show_transcribing(self):
         """Show transcribing state"""
@@ -241,21 +241,32 @@ class WhisprOverlay(Gtk.Window):
         # Shift waveform data and add new level
         self.waveform_data = self.waveform_data[1:] + [min(1.0, level)]
 
-    def _center_on_screen(self):
-        """Center the overlay on the primary monitor"""
+    def _position_top_right(self):
+        """Position overlay top-right, just below the system tray panel."""
         display = Gdk.Display.get_default()
-        if display:
-            monitors = display.get_monitors()
-            if monitors.get_n_items() > 0:
-                monitor = monitors.get_item(0)
-                geom = monitor.get_geometry()
+        if not display:
+            return
+        monitors = display.get_monitors()
+        if monitors.get_n_items() == 0:
+            return
+        geom = monitors.get_item(0).get_geometry()
 
-                # Position at bottom center
-                x = geom.x + (geom.width - 200) // 2
-                y = geom.y + geom.height - 150
+        x = geom.x + geom.width - 200 - 12   # 12px from right edge
+        y = geom.y + 42                        # below XFCE panel (~32px) + gap
 
-                # GTK4 doesn't have move(), we need to use surface API
-                # For now, rely on window manager
+        def _move():
+            try:
+                import subprocess
+                subprocess.run(
+                    ['xdotool', 'search', '--sync', '--name', 'Whispr',
+                     'windowmove', str(x), str(y)],
+                    capture_output=True, timeout=2
+                )
+            except Exception:
+                pass
+            return False  # run once
+
+        GLib.timeout_add(60, _move)
 
     def _start_animation(self):
         """Start animation loop"""
