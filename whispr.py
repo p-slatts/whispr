@@ -388,6 +388,7 @@ class Whispr:
         # Threading
         self._lock = threading.Lock()
         self._activation_source = None
+        self._activated = False
 
     def _get_trigger_keys(self) -> list:
         """Get normalized list of trigger key names"""
@@ -451,6 +452,7 @@ class Whispr:
         if not self._is_trigger_key(key):
             return
 
+        stop = False
         with self._lock:
             self.trigger_pressed = False
 
@@ -465,7 +467,11 @@ class Whispr:
                     GLib.idle_add(self.overlay.hide_overlay)
 
             elif self.state == WhisprState.RECORDING:
-                self._stop_recording()
+                self.state = WhisprState.TRANSCRIBING
+                stop = True
+
+        if stop:
+            self._stop_recording()
 
     def _check_activation(self) -> bool:
         """Check if we should activate recording"""
@@ -509,16 +515,12 @@ class Whispr:
         debug("Recording...")
 
     def _stop_recording(self):
-        """Stop recording and start transcription"""
-        self.state = WhisprState.TRANSCRIBING
-
-        # Update overlay
+        """Stop recording and start transcription (called outside the lock)."""
         if self.overlay:
             GLib.idle_add(self.overlay.show_transcribing)
 
         debug("Transcribing...")
 
-        # Stop recording - now returns path to WAV file
         wav_path = self.recorder.stop()
 
         if wav_path:
@@ -769,6 +771,10 @@ class Whispr:
 
     def _on_activate(self, app):
         """GTK application activation"""
+        if self._activated:
+            return
+        self._activated = True
+
         self.overlay = WhisprOverlay()
         self.overlay.set_application(app)
 
