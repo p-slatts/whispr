@@ -13,14 +13,20 @@ Hold a key to record, release to transcribe and paste. WisprFlow-style speech-to
 
 ## Quick install (fresh Ubuntu machine)
 
-### 1. Install system packages
+### 1. Clone Whispr
+
+```bash
+git clone https://github.com/p-slatts/whispr ~/projects/whispr
+```
+
+### 2. Install system packages
 
 ```bash
 cd ~/projects/whispr
 ./setup-deps.sh
 ```
 
-### 2. Build whisper.cpp + download a model
+### 3. Build whisper.cpp + download a model
 
 ```bash
 git clone https://github.com/ggerganov/whisper.cpp ~/projects/whisper.cpp
@@ -29,7 +35,7 @@ cmake -B build && cmake --build build -j$(nproc)
 bash models/download-ggml-model.sh tiny.en
 ```
 
-### 3. Install Whispr
+### 4. Install Whispr
 
 ```bash
 cd ~/projects/whispr
