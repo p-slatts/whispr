@@ -66,6 +66,11 @@ if ! python3 -c "import ensurepip" &>/dev/null; then
     MISSING_DEPS="$MISSING_DEPS python3.10-venv python3-pip"
 fi
 
+# Check for XApp GI bindings (needed by tray_applet.py for Cinnamon SNI support)
+if ! python3 -c "import gi; gi.require_version('XApp','1.0'); from gi.repository import XApp" &>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS gir1.2-xapp-1.0"
+fi
+
 if [[ -n "$MISSING_DEPS" ]]; then
     echo
     echo "Missing system dependencies. Install with:"
@@ -127,6 +132,7 @@ echo
 echo "Installing Whispr..."
 cp "$SCRIPT_DIR/whispr.py" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/overlay.py" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/tray_applet.py" "$INSTALL_DIR/"
 
 # Create launcher script
 cat > "$BIN_DIR/whispr" << 'LAUNCHER'

@@ -43,6 +43,8 @@ from gi.repository import Gtk, Gdk, GLib
 # Our overlay
 from overlay import WhisprOverlay
 
+_TRAY_APPLET = Path(__file__).parent / 'tray_applet.py'
+
 
 @dataclass
 class WhisprConfig:
@@ -379,6 +381,10 @@ class Whispr:
         self.app: Optional[Gtk.Application] = None
         self.overlay: Optional[WhisprOverlay] = None
 
+        # Enable/disable toggle
+        self.enabled = True
+        self._tray_process = None
+
         # Threading
         self._lock = threading.Lock()
         self._activation_source = None
@@ -407,6 +413,9 @@ class Whispr:
 
     def _on_key_press(self, key):
         """Handle key press"""
+        if not self.enabled:
+            return
+
         # Debug: show what key was pressed
         debug(f"Key pressed: {key}, trigger_keys={self.trigger_keys}, is_trigger={self._is_trigger_key(key)}")
 
@@ -422,6 +431,10 @@ class Whispr:
             if self.state == WhisprState.IDLE:
                 self.key_press_time = time.time()
                 self.state = WhisprState.WAITING
+
+                # Show standby indicator immediately on key press
+                if self.overlay:
+                    GLib.idle_add(self.overlay.show_standby)
 
                 # Cancel any pending activation
                 if self._activation_source:
@@ -442,12 +455,14 @@ class Whispr:
             self.trigger_pressed = False
 
             if self.state == WhisprState.WAITING:
-                # Released before activation
+                # Released before activation — dismiss standby immediately
                 self.state = WhisprState.IDLE
                 self.key_press_time = None
                 if self._activation_source:
                     GLib.source_remove(self._activation_source)
                     self._activation_source = None
+                if self.overlay:
+                    GLib.idle_add(self.overlay.hide_overlay)
 
             elif self.state == WhisprState.RECORDING:
                 self._stop_recording()
@@ -768,11 +783,65 @@ class Whispr:
         keys_str = " or ".join(key_names)
         hold_time = self.config.hold_duration
 
+        self._setup_tray()
+
         print(f"Whispr running!", file=sys.stderr)
         print(f"  Hold {keys_str} for {hold_time}s to start recording", file=sys.stderr)
         print(f"  Release to transcribe and paste", file=sys.stderr)
 
         self._notify("Whispr Ready", f"Hold {keys_str} for {hold_time}s to record")
+
+    def _setup_tray(self):
+        """Spawn tray_applet.py subprocess (GTK3/XApp, avoids GTK4 conflict)."""
+        if not _TRAY_APPLET.exists():
+            return
+        try:
+            self._tray_process = subprocess.Popen(
+                [sys.executable, str(_TRAY_APPLET), str(self.enabled).lower()],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            threading.Thread(target=self._tray_reader, daemon=True).start()
+        except Exception as e:
+            debug(f'Tray error: {e}')
+
+    def _tray_reader(self):
+        """Read actions from tray subprocess stdout."""
+        if not self._tray_process:
+            return
+        try:
+            for line in self._tray_process.stdout:
+                action = line.strip()
+                if action == 'toggle':
+                    self.enabled = not self.enabled
+                    self._tray_send(f'enabled:{str(self.enabled).lower()}')
+                    GLib.idle_add(
+                        self._notify, 'Whispr',
+                        'Enabled - hold key to record' if self.enabled else 'Disabled'
+                    )
+                elif action == 'quit':
+                    GLib.idle_add(self._quit_from_tray)
+        except Exception as e:
+            debug(f'Tray read error: {e}')
+
+    def _tray_send(self, msg: str):
+        """Send a line to the tray subprocess stdin."""
+        if self._tray_process and self._tray_process.stdin:
+            try:
+                self._tray_process.stdin.write(msg + '\n')
+                self._tray_process.stdin.flush()
+            except Exception:
+                pass
+
+    def _quit_from_tray(self, icon=None, item=None):
+        if self._tray_process:
+            try:
+                self._tray_process.terminate()
+            except Exception:
+                pass
+        self.app.quit()
 
     def run(self):
         """Run the application"""
