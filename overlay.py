@@ -35,11 +35,16 @@ class WhisprOverlay(Gtk.Window):
         self.set_modal(False)
 
         # State
+        self.is_standby = False
         self.is_recording = False
         self.is_transcribing = False
         self.animation_phase = 0.0
         self.waveform_data = [0.0] * 20  # Audio level history
         self.animation_id = None
+
+        # Positioning cache — avoids slow xdotool search on every show
+        self._xid = None
+        self._positioned = False
 
         # Drawing area for custom rendering
         self.drawing_area = Gtk.DrawingArea()
@@ -113,6 +118,8 @@ class WhisprOverlay(Gtk.Window):
             self._draw_recording_state(cr, width, height)
         elif self.is_transcribing:
             self._draw_transcribing_state(cr, width, height)
+        elif self.is_standby:
+            self._draw_standby_state(cr, width, height)
 
     def _draw_rounded_rect(self, cr, x, y, w, h, r):
         """Draw a rounded rectangle path"""
@@ -214,18 +221,56 @@ class WhisprOverlay(Gtk.Window):
         cr.move_to(cx - extents.width / 2, height - 10)
         cr.show_text(text)
 
+    def _get_xid(self):
+        """Get X11 window ID directly from GDK (fast, no subprocess search)."""
+        if self._xid:
+            return self._xid
+        try:
+            from gi.repository import GdkX11
+            surface = self.get_surface()
+            if surface:
+                self._xid = str(GdkX11.X11Surface.get_xid(surface))
+        except Exception:
+            pass
+        return self._xid
+
+    def _show_at_position(self):
+        """Present window, positioning if first time, or reveal instantly if cached."""
+        if self._positioned and self._xid:
+            self.set_visible(True)
+            self.set_opacity(1)
+            self.present()
+        else:
+            self.set_opacity(0)
+            self.present()
+            self._position_top_right()
+
+    def show_standby(self):
+        """Instantly show subtle standby indicator when key is first pressed."""
+        if self.is_recording or self.is_transcribing:
+            return
+        self.is_standby = True
+        self.is_recording = False
+        self.is_transcribing = False
+        self._start_animation()
+        self._show_at_position()
+
     def show_recording(self):
-        """Show recording state"""
+        """Transition to full recording state."""
+        self.is_standby = False
         self.is_recording = True
         self.is_transcribing = False
-        self.waveform_data = [0.3] * 20  # Initial waveform
-        self._start_animation()
-        self.set_opacity(0)   # hide until positioned
-        self.present()
-        self._position_top_right()
+        self.waveform_data = [0.3] * 20
+        if self.animation_id is None:
+            self._start_animation()
+        if self.get_visible():
+            self.drawing_area.queue_draw()  # already visible — just redraw
+        else:
+            self._show_at_position()
 
     def show_transcribing(self):
         """Show transcribing state"""
+        self.is_standby = False
         self.is_recording = False
         self.is_transcribing = True
         self.drawing_area.queue_draw()
@@ -233,6 +278,7 @@ class WhisprOverlay(Gtk.Window):
     def hide_overlay(self):
         """Hide the overlay"""
         self._stop_animation()
+        self.is_standby = False
         self.is_recording = False
         self.is_transcribing = False
         self.set_visible(False)
@@ -242,9 +288,26 @@ class WhisprOverlay(Gtk.Window):
         # Shift waveform data and add new level
         self.waveform_data = self.waveform_data[1:] + [min(1.0, level)]
 
+    def _draw_standby_state(self, cr, width, height):
+        """Subtle pulsing dot — visible immediately on key press."""
+        cx = width / 2
+        cy = height / 2
+        pulse = 0.6 + 0.4 * math.sin(self.animation_phase * 3)
+        cr.set_source_rgba(0.7, 0.7, 0.7, 0.5 * pulse)
+        cr.arc(cx, cy, 10 * pulse, 0, 2 * math.pi)
+        cr.fill()
+
+        cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(12)
+        cr.set_source_rgba(1, 1, 1, 0.5)
+        text = "Hold to record..."
+        extents = cr.text_extents(text)
+        cr.move_to(cx - extents.width / 2, cy + 22)
+        cr.show_text(text)
+
     def _position_top_right(self):
-        """Position overlay top-right, just below the system tray panel.
-        Also marks it as a notification window so the WM doesn't tile around it."""
+        """Position overlay top-right, just below the panel.
+        Uses GDK XID on first show; subsequent shows are instant (cache hit)."""
         display = Gdk.Display.get_default()
         if not display:
             return
@@ -252,39 +315,46 @@ class WhisprOverlay(Gtk.Window):
         if monitors.get_n_items() == 0:
             return
         geom = monitors.get_item(0).get_geometry()
-
-        x = geom.x + geom.width - 200 - 12   # 12px from right edge
-        y = geom.y + 42                        # below XFCE panel (~32px) + gap
+        x = geom.x + geom.width - 200 - 12
+        y = geom.y + 42
 
         def _move():
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ['xdotool', 'search', '--sync', '--name', 'Whispr'],
-                    capture_output=True, text=True, timeout=2
-                )
-                xids = result.stdout.strip().splitlines()
-                if not xids:
-                    return False
-                xid = xids[-1]
-                # Float above everything, no tiling
-                subprocess.run(['xprop', '-id', xid,
-                    '-f', '_NET_WM_WINDOW_TYPE', '32a',
-                    '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_NOTIFICATION'],
-                    capture_output=True)
-                subprocess.run(['xprop', '-id', xid,
-                    '-f', '_NET_WM_STATE', '32a',
-                    '-set', '_NET_WM_STATE',
-                    '_NET_WM_STATE_ABOVE,_NET_WM_STATE_SKIP_TASKBAR,_NET_WM_STATE_SKIP_PAGER'],
-                    capture_output=True)
-                subprocess.run(['xdotool', 'windowmove', xid, str(x), str(y)],
-                    capture_output=True, timeout=2)
-            except Exception:
-                pass
+            import subprocess
+            xid = self._get_xid()
+            if not xid:
+                # Fallback: try xdotool without --sync (non-blocking)
+                try:
+                    result = subprocess.run(
+                        ['xdotool', 'search', '--name', 'Whispr'],
+                        capture_output=True, text=True, timeout=1
+                    )
+                    xids = result.stdout.strip().splitlines()
+                    if xids:
+                        xid = xids[-1]
+                        self._xid = xid
+                except Exception:
+                    pass
+            if xid:
+                try:
+                    subprocess.run(['xprop', '-id', xid,
+                        '-f', '_NET_WM_WINDOW_TYPE', '32a',
+                        '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_NOTIFICATION'],
+                        capture_output=True)
+                    subprocess.run(['xprop', '-id', xid,
+                        '-f', '_NET_WM_STATE', '32a',
+                        '-set', '_NET_WM_STATE',
+                        '_NET_WM_STATE_ABOVE,_NET_WM_STATE_SKIP_TASKBAR,_NET_WM_STATE_SKIP_PAGER'],
+                        capture_output=True)
+                    subprocess.run(['xdotool', 'windowmove', xid, str(x), str(y)],
+                        capture_output=True, timeout=1)
+                    self._positioned = True
+                except Exception:
+                    pass
             GLib.idle_add(lambda: self.set_opacity(1))
-            return False  # run once
+            return False
 
-        GLib.timeout_add(60, _move)
+        # Only short delay so GTK has mapped the window before we call xprop
+        GLib.timeout_add(30, _move)
 
     def _start_animation(self):
         """Start animation loop"""
