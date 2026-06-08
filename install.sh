@@ -142,53 +142,77 @@ exec "$WHISPR_DIR/venv/bin/python" "$WHISPR_DIR/whispr.py" "$@"
 LAUNCHER
 chmod +x "$BIN_DIR/whispr"
 
-# Create systemd service
+# Create whispr systemd service
 cat > "$SYSTEMD_DIR/whispr.service" << 'SERVICE'
 [Unit]
 Description=Whispr - Speech to Text
-Documentation=https://github.com/your-repo/whispr
-After=graphical-session.target
+After=graphical-session.target whisper-server.service
+Wants=whisper-server.service
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/whispr
 Restart=on-failure
 RestartSec=5
-
-# Environment for GUI access
 Environment=DISPLAY=:0
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 SERVICE
 
-# Reload systemd
+# Create whisper-server systemd service (adjust paths if needed)
+WHISPER_BIN="$HOME/projects/whisper.cpp/build/bin/whisper-server"
+WHISPER_MODEL="$HOME/projects/whisper.cpp/models/ggml-tiny.en-q5_0.bin"
+if [[ -x "$WHISPER_BIN" && -f "$WHISPER_MODEL" ]]; then
+    cat > "$SYSTEMD_DIR/whisper-server.service" << SERVICE2
+[Unit]
+Description=Whisper.cpp Inference Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$WHISPER_BIN -m $WHISPER_MODEL -t 4 --host 127.0.0.1 --port 58080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+SERVICE2
+    echo "  Created whisper-server.service"
+fi
+
+# Disable .desktop autostart — systemd manages startup now
+AUTOSTART="$HOME/.config/autostart/whispr.desktop"
+if [[ -f "$AUTOSTART" ]]; then
+    sed -i 's/X-GNOME-Autostart-enabled=true/X-GNOME-Autostart-enabled=false/' "$AUTOSTART"
+fi
+
+# Enable and start both services
 echo
-echo "Configuring systemd service..."
+echo "Enabling services..."
 systemctl --user daemon-reload
+systemctl --user enable whisper-server whispr
+systemctl --user start whisper-server
+sleep 2
+systemctl --user start whispr
 
 echo
 echo "========================================"
 echo "  Installation Complete!"
 echo "========================================"
 echo
-echo "To start Whispr:"
-echo "  whispr                    # Run in terminal"
-echo "  systemctl --user start whispr   # Run as service"
+echo "Both services enabled and started:"
+echo "  whisper-server  — whisper.cpp at 127.0.0.1:58080"
+echo "  whispr          — hold Alt/Print Screen to record"
 echo
-echo "To enable on login:"
-echo "  systemctl --user enable whispr"
+echo "They will restart automatically on login."
 echo
-echo "Usage:"
-echo "  Hold CTRL for 0.5 seconds to start recording"
-echo "  Release CTRL to transcribe and paste"
+echo "Manage with:"
+echo "  systemctl --user status whispr"
+echo "  systemctl --user status whisper-server"
 echo
-echo "Options:"
-echo "  whispr --help             # Show all options"
-echo "  whispr --key alt          # Use Alt key instead"
-echo "  whispr --hold 1.0         # 1 second hold time"
-echo "  whispr --openai           # Use OpenAI Whisper API"
+echo "Config: ~/.config/whispr/config.py"
 echo
 echo "Config file: ~/.config/whispr/config.py"
 echo
